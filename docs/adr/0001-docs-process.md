@@ -22,7 +22,7 @@ Option 3:
 - `docs/high-level-design.md` (HLD): how the system is built.
 - `docs/designs/`: a design doc for work spanning several features or components (the first is the weekly game engine).
 - `docs/specs/`: one spec per feature, written and agreed before its code.
-- `docs/adr/`: one record per significant or hard-to-reverse decision. Accepted ADRs are never edited; a new ADR supersedes an old one.
+- `docs/adr/`: one record per significant or hard-to-reverse decision. An accepted ADR's decision is never changed in place; a new ADR supersedes it. Factual corrections that don't change the decision may be made in place and are listed under "Amendments".
 
 Each rule lives in one document; others link to it rather than restating it.
 
@@ -30,3 +30,6 @@ Each rule lives in one document; others link to it rather than restating it.
 - Every feature PR points to a spec or design, and updates it if implementation proves it wrong.
 - Readers follow links instead of reading everything in one place.
 - Copies of rules are avoided on purpose: the PRD summarizes the game and links to the engine design.
+
+## Amendments
+- 2026-11-11: clarified that factual corrections which don't change a decision may be made in place and recorded under "Amendments". The decision is unchanged.

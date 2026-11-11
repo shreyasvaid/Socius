@@ -21,4 +21,4 @@ What we chose, in one or two sentences.
 ## Consequences
 What gets easier, what gets harder, what we'll need to revisit.
 
-<!-- An accepted ADR is never edited. To change a decision, write a new ADR that supersedes it and fill in "Superseded by" here. -->
+<!-- An accepted ADR's decision is never changed in place. To change a decision, write a new ADR that supersedes it and fill in "Superseded by" here. Factual corrections that don't change the decision (a wrong version, a wrong file location) may be made in place, each recorded in an "Amendments" list at the end. -->

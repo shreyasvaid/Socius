@@ -17,6 +17,8 @@ Members of one group can live in different time zones and travel, and one check-
 3. **Phone local date plus a single global cutoff**: simple and constant; results arrive late in eastern zones.
 
 ## Decision
+Summary only; the engine design's Decided Rules is authoritative if the two ever differ.
+
 Option 3. A check-in is dated with the phone's local date (honor system). Weeks run Monday to Sunday and are keyed by their Monday's date, which handles the roughly 26-hour weekend overlap when two weeks are open. Every group's week closes at Monday 12:00 UTC, when Sunday has ended everywhere on Earth. Code takes the time from an injected clock, never from the system or the database.
 
 Full model: [Time model](../designs/weekly-game-engine.md#time-model). Rejected alternatives: [D–F](../designs/weekly-game-engine.md#alternatives-considered).
@@ -25,3 +27,6 @@ Full model: [Time model](../designs/weekly-game-engine.md#time-model). Rejected 
 - No group time zone to store or convert.
 - Results reach California around 04:00 Monday and Sydney around 23:00 Monday.
 - A member can change their phone's clock or zone; that is accepted under the honor system.
+
+## Amendments
+- 2026-11-11: added the note that this decision text is a summary and the engine design is authoritative.
