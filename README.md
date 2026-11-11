@@ -2,7 +2,7 @@
 
 **Fitness accountability for couples, families, and roommates. Show up, or take the punishment.**
 
-> **Status: in design.** No application code yet. Start with the [design document](docs/design.md).
+> **Status: in design.** No application code yet. Start with the [product requirements](docs/product-requirements.md).
 
 ## What it is
 
@@ -25,7 +25,8 @@ Socius is a cross-platform mobile app for small groups who already know each oth
 
 ## Docs
 
-- [Design document](docs/design.md)
+- [Product requirements](docs/product-requirements.md)
+- [High-level design](docs/high-level-design.md)
 - [Architecture decision records](docs/adr/)
 - [Feature specs](docs/specs/)
 

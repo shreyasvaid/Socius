@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Draft / Agreed / Implemented / Superseded |
 | **Author** | |
-| **Design refs** | e.g. design §6.3, FR-10–FR-15 |
+| **Design refs** | e.g. PRD §6.3, FR-10–FR-15; HLD §4 |
 | **Phase** | v0.x |
 
 ## Problem
