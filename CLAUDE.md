@@ -35,7 +35,8 @@ Update this checklist as work lands.
 
 - Mobile: React Native + Expo, TypeScript (strict), Expo Router, TanStack Query
 - API: Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2.x, Alembic
-- DB: PostgreSQL. Auth: Supabase Auth (proposed, ADR-0004). Storage: S3-compatible
+- DB: PostgreSQL 17 (needed for `transaction_timeout`). Auth: Supabase Auth (proposed, ADR-0004). Storage: S3-compatible
+- Hosting: Render free web service kept awake by an uptime ping; Postgres hosted separately (Render's free Postgres expires). Run one uvicorn worker.
 - Push: Expo Push. Jobs: APScheduler inside the API process (every 5 min) plus close on read; idempotent
 - API client: openapi-typescript + openapi-fetch; TanStack Query hooks written by hand around one key factory
 - Tooling: pnpm, uv, `just` (single entry point), ruff, pyright (strict), pytest + Hypothesis, Schemathesis, ESLint, Prettier, Jest + RNTL, Maestro (later)
@@ -77,8 +78,8 @@ Tracked in PRD §12. Resolve them in the doc (and an ADR if significant) rather 
 
 ## Unconfirmed defaults (ask before treating as final)
 
-These are in the PRD but were chosen by the assistant and not yet approved by Shreyas:
-18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2).
+These were chosen by the assistant and not yet approved by Shreyas:
+18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · groups can have several admins · a removed member can still see results of weeks they were part of and gets those weeks' results notification · a new group's first settings cover the week its creator joined in (engine design, Decided Rules).
 
 ## Environment
 

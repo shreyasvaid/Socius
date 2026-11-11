@@ -35,7 +35,7 @@ Socius is a cross-platform mobile app for small groups who already know each oth
 
 ## Development
 
-The repo scaffold is in progress, so these commands don't work yet. Once it lands:
+The repo scaffold hasn't started yet (it's the next step), so these commands don't work yet. Once it lands:
 
 **Prerequisites:** Node (current LTS), pnpm via Corepack, [uv](https://docs.astral.sh/uv/), [just](https://github.com/casey/just), Docker.
 
