@@ -71,3 +71,14 @@ Update this checklist as work lands.
 ## Open questions
 
 Tracked in design §20. Resolve them in the doc (and an ADR if significant) rather than in code comments.
+
+## Unconfirmed defaults (ask before treating as final)
+
+These are in docs/design.md but were chosen by the assistant and not yet approved by Shreyas:
+18+ age gate · max 8 members · check-in grace until 12:00 next day · rest-day votes need majority of all members (non-voters = no) · 1 skip token/period · 30-day photo retention · perfect week = no loser · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2).
+
+## Environment
+
+- Dev machine: MacBook Pro (macOS), iPhone for testing. Most testers use iPhone; Android must still work.
+- conda `base` env is active by default in the shell. Use uv-managed Python for services/api; don't install into conda.
+- Apple Developer Program ($99/yr) not yet purchased; buy when v0.1 is ready for TestFlight testers.
