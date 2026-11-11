@@ -20,6 +20,7 @@ Done:
 - [x] Spec and ADR templates (`docs/specs/0000-template.md`, `docs/adr/0000-template.md`)
 - [x] Weekly game engine design, reviewed and accepted (`docs/designs/weekly-game-engine.md`)
 - [x] ADRs 0001–0010 (`docs/adr/`)
+- [x] Part B, Stage 8: PRD, HLD, README, CLAUDE.md and templates updated to link the game engine design
 
 Next, in order (item numbers refer to the design's Detailed Implementation Plan):
 1. Part A, Stage 1: scaffold and CI (items 1–10): pnpm workspace, root `justfile`, Docker Compose Postgres, `.env.example`, GitHub Actions CI, branch protection on `main`.

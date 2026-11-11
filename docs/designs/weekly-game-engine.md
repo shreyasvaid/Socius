@@ -23,7 +23,7 @@ This document designs two things:
     A **skip token** is one free point per member, per group, per week. It isn't tied to a day.
 2.  **The engineering foundation that protects it:** build tooling, the API contract between app and server, and a testing approach aimed at the code most likely to produce a wrong result: scoring, dates and the weekly close.
 
-This design is the single source of the game rules. It replaces the earlier adherence-based model in [the product requirements](../product-requirements.md) §6–7 and the group-time-zone model in [the high-level design](../high-level-design.md) §3. Once approved, those documents are changed to summarize and link here instead of restating the rules (see Part B of the plan).
+This design is the single source of the game rules. It replaced the earlier adherence-based model in [the product requirements](../product-requirements.md) and the group-time-zone model in [the high-level design](../high-level-design.md). Both documents now summarize the game and link here instead of restating the rules (Part B, Stage 8 of the plan, done 2026-11-11).
 
 --------------------------------------------------------------------------------
 
@@ -697,7 +697,7 @@ These ideas were deferred, not rejected:
 The plan has two parts.
 
 *   **Part A (the engine):** everything needed to build and test the game engine without a phone. It also includes the scaffold, CI and the generated client that the contract check needs.
-*   **Part B (follow-ups):** the documentation rewrites and the mobile app. Part B's screens need spec 0001 (groups and invites) to be useful.
+*   **Part B (follow-ups):** the documentation rewrites (Stage 8, done) and the mobile app (Stage 9). Part B's screens need spec 0001 (groups and invites) to be useful.
 
 Each stage is one or more small PRs with green CI, and each stage depends on the ones before it. Items marked **[default]** were proposed defaults, approved by the author with this plan. Database access is synchronous (Decision D4, at the end of this section).
 
@@ -1217,6 +1217,17 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **`errors.ts`:** `SociusApiError` holds a `code` (the generated enum), `status` and `detail`. `toSociusApiError` parses problem-detail responses into it.
 
 ### Part B, Stage 8: Documentation
+
+**Status: done (2026-11-11).** Items 48–64 were applied as described below, with these deviations:
+
+| Plan says | What was done | Why |
+|---|---|---|
+| Item 48: FR-17 and FR-18, delete | Kept as "*(Removed: …)*" placeholders | Deleting them would renumber later requirements and break references |
+| Item 48: new requirement for specific error messages | Added as FR-15a | Keeps existing requirement numbers stable |
+| Item 51: README Development section | Added, with a note that the `just` commands work only once Part A, Stage 1 lands | The commands don't exist yet |
+| Item 50: CLAUDE.md "Current status" follows Parts A and B | Done; Stage 8 listed as complete | — |
+
+The rest of this stage is kept as the record of what changed.
 
 Rule for this stage: the PRD, HLD and CLAUDE.md **summarize and link** to this design for the game rules. They don't restate them.
 
