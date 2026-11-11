@@ -13,7 +13,7 @@
 
 ## 1. Overview
 
-Socius is a cross-platform (iOS + Android) fitness accountability app for small groups of people who already know each other: couples, families, friends, roommates. The group agrees on a weekly target (for example, 4 workouts), the same for everyone, and each member checks in on the days they train. At the end of each Monday–Sunday week, the member with the fewest check-ins against that target takes the punishment the group agreed on: buying dinner, doing a chore, whatever the group decides. If everyone hits the target, nobody loses.
+Socius is a cross-platform (iOS + Android) fitness accountability app for small groups of people who already know each other: couples, families, friends, roommates. The group agrees on a weekly target (for example, 4 workouts), the same for everyone, and each member checks in on the days they train. At the end of each Monday–Sunday week, the member with the fewest points (check-ins plus a weekly skip token, up to the target) takes the punishment the group agreed on: buying dinner, doing a chore, whatever the group decides. If everyone hits the target, nobody loses.
 
 The product bet is that **social stakes among people you live with or see every week** keep people training more reliably than streaks, badges, or anonymous leaderboards.
 
@@ -82,16 +82,16 @@ Age requirement: **18+** for v0.1 (health data + calorie targets + punishment me
 | **Profile** | A user's private body data and goal. Never visible to others. |
 | **Group** | A set of 1–8 members sharing a weekly target and punishment. |
 | **Admin** | A member who can change group settings, excuse members, and remove members. The group's creator is the first admin. (Earlier drafts called this role "Owner".) |
-| **Week** | The scoring window: always Monday to Sunday, identified by its Monday's date. |
-| **Target N** | The number of check-ins per week the group agrees on, 1–7, the same for every member. |
+| **Week** | The scoring window: always Monday to Sunday, identified by its Monday's date. [Rule](designs/weekly-game-engine.md#time-model). |
+| **Target N** | The number of check-ins per week the group agrees on, 1–7, the same for every member. [Rule](designs/weekly-game-engine.md#decided-rules). |
 | **Check-in** | A user's claim that they completed a workout on a given date (the phone's local date). Optionally carries proof photos. |
 | **Points** | Distinct check-in days in the week, plus 1 for a skip token, capped at N. [Rule](designs/weekly-game-engine.md#decided-rules). |
-| **Skip token** | One free point per member, per group, per week. Not tied to a day. |
+| **Skip token** | One free point per member, per group, per week. Not tied to a day. [Rule](designs/weekly-game-engine.md#decided-rules). |
 | **Eligible / Excused / Joined mid-week** | Whether a member can lose a given week. [Rule](designs/weekly-game-engine.md#eligibility-and-the-loser-rule). |
 | **Cutoff** | Monday 12:00 UTC: the moment a week closes for every group. [Rule](designs/weekly-game-engine.md#time-model). |
-| **Tie-break** | A random pick among members tied for the fewest points. |
+| **Tie-break** | A random pick among members tied for the fewest points. [Rule](designs/weekly-game-engine.md#eligibility-and-the-loser-rule). |
 | **Punishment** | Free text the loser of a week is expected to do. |
-| **Plan** | A per-user workout plan fitted to the group schedule and the user's goal (v0.4). |
+| **Plan** | A per-user workout plan fitted to the group's weekly target and the user's goal (v0.4). |
 
 ---
 
@@ -111,15 +111,15 @@ Requirements are labeled `FR-x` and referenced from specs and tests.
 - FR-5. A user can create a group: name, weekly target N, punishment text.
 - FR-6. An admin can invite members via a shareable invite code/link. Codes expire and can be revoked.
 - FR-7. Max 8 active members per group in v0.1.
-- FR-8. Members cannot leave a group on their own; an admin removes members. A member removed mid-week is still scored that week ([rule](designs/weekly-game-engine.md#decided-rules)). Admin rights can be transferred.
+- FR-8. Members cannot leave a group on their own; an admin removes members. A group can have several admins; promoting and stepping down are defined in spec 0001. Removal mid-week: see [Decided Rules](designs/weekly-game-engine.md#decided-rules).
 - FR-9. A user may belong to more than one group.
 
 ### 5.3 Check-ins (v0.1)
 
-- FR-10. A member can check in once per local date (the date on their phone).
-- FR-11. Any day of the open week can be logged, up to the week's cutoff (Monday 12:00 UTC). Dates later than today anywhere on Earth are rejected.
+- FR-10. A member can check in once per local date (the date on their phone). [Rule](designs/weekly-game-engine.md#decided-rules).
+- FR-11. Any day of the open week can be logged until the week closes. [Rule](designs/weekly-game-engine.md#decided-rules).
 - FR-12. A check-in may include up to 3 optional proof photos, visible to group members.
-- FR-13. A member can undo their own check-in while its week is open.
+- FR-13. A member can undo their own check-in while its week is open. [Rule](designs/weekly-game-engine.md#decided-rules).
 - FR-14. **Honor system.** No verification in v0.1. *(Planned: a member can "challenge" a check-in without photos; resolution TBD; see Q6.)*
 - FR-15. A check-in counts in every group the user belongs to.
 - FR-15a. Every rejected action shows a specific message saying why (for example, "You've already checked in today.").
@@ -134,7 +134,7 @@ See §6.
 
 ### 5.6 Notifications (v0.1)
 
-- FR-16. Reminder if not checked in by a configurable time (default 19:00), in the phone's current time zone.
+- FR-16. Reminder if not checked in by a configurable time (default 19:00), in the phone's current time zone (reported by the app when it opens).
 - FR-17. *(Removed: rest-day vote notifications. Rest-day votes are cut from v0.1.)*
 - FR-18. *(Removed: vote reminders.)*
 - FR-19. Week closed → "results are in" notification to the group. The notification doesn't name the loser; the results screen does.
@@ -158,17 +158,16 @@ The full rules, with their edge cases and tests, are in the [weekly game engine 
 
 - Free text on the group, editable by an admin. The text in force when a week closes is saved with that week's result, and edits take effect from the next week, so editing mid-week doesn't change this week's stakes.
 - Displayed with the week's result. No tracking of whether it was done (maybe a "done" toggle later).
-- **Schedule advisor (v0.2):** when the target is set, Socius checks each member's goal against N and suggests changes (e.g., "Body recomposition with 2 workouts a week is light. Consider 4."). Suggestions only.
+
+### 6.2 Target advisor (v0.2)
+
+When the target is set, Socius checks each member's goal against N and suggests changes (e.g., "Body recomposition with 2 workouts a week is light. Consider 4."). Suggestions only.
 
 ---
 
 ## 7. Skip tokens and excusals
 
-- **Skip token:** one per member, per group, per week. It adds one point, isn't tied to a day, and can be withdrawn while the week is open. Being sick isn't a group decision; without tokens, one illness decides the week.
-- **Excusal:** an admin can excuse any member, including themselves, for a week, for any reason. An excused member can't lose that week. The request must be made by the end of Sunday; the group sees who was excused and by whom; the reason is never stored.
-- Rest-day votes are cut from v0.1.
-
-Exact rules: [Decided Rules](designs/weekly-game-engine.md#decided-rules).
+Each member gets one skip token per group per week, worth one free point, so a single sick day doesn't decide the week. An admin can excuse a member from a week for any reason, so they can't lose it; the group sees it. Rest-day votes are cut from v0.1. Exact rules: [Decided Rules](designs/weekly-game-engine.md#decided-rules).
 
 ---
 
@@ -179,7 +178,7 @@ Exact rules: [Decided Rules](designs/weekly-game-engine.md#decided-rules).
 | Field | Used for | Phase |
 |---|---|---|
 | Display name | Group UI | v0.1 |
-| Goal: lose fat / build muscle / recomposition / maintain | Schedule advisor, targets, plans | v0.1 (stored), v0.2 (used) |
+| Goal: lose fat / build muscle / recomposition / maintain | Target advisor, targets, plans | v0.1 (stored), v0.2 (used) |
 | Date of birth | 18+ gate; BMR | v0.1 |
 | Sex used for calorie formula | BMR | v0.2 |
 | Height, weight | BMR | v0.2 |
@@ -226,7 +225,7 @@ Rule: **only ask for a field in the phase that uses it.** Every onboarding field
 | Calorie targets, food logs, food photos | ✅ | ❌ | — |
 | Display name | ✅ | ✅ | — |
 | Check-ins (date) | ✅ | ✅ | — |
-| Check-in time zone and UTC offset | ✅ (stored) | ❌ never shown (reveals location) | — |
+| Time zones: a check-in's zone and offset, and the phone's current zone (for reminders) | ✅ (stored) | ❌ never shown (reveals location) | — |
 | Proof photos | ✅ | ✅ | — |
 | Points and weekly results | ✅ | ✅ | — |
 | Skip-token usage | ✅ | ✅ (that one was used, not why) | — |
@@ -244,7 +243,7 @@ Retention: proof photos deleted after 30 days (Q9). Account deletion hard-delete
 |---|---|---|
 | **0: Foundation** | Design doc, ADRs, monorepo scaffold, CI, local dev env, auth wired end-to-end | "Hello authenticated user" on a real iPhone via dev build; CI green |
 | **v0.1: The game** | Profiles (min), groups, invites, weekly target, check-ins (+ optional photos), skip tokens, admin excusals, scoring, close, results, push ([engine design](designs/weekly-game-engine.md)) | Test group uses it for 4 weeks |
-| **v0.2: Targets** | Full profile, calorie/macro targets with guardrails, manual food logging, schedule advisor | Targets validated against reference calculators |
+| **v0.2: Targets** | Full profile, calorie/macro targets with guardrails, manual food logging, target advisor | Targets validated against reference calculators |
 | **v0.3: Photo logging** | Photo → editable macro estimate via vision model | Estimates always user-confirmed |
 | **v0.4: Plans** | Rule-based per-user workout plans fitted to the group's weekly target | Plans generated for every goal × target combination in tests |
 | **Later** | Check-in challenges, fixed-days mode, verifiable tie-break and suspense animation, Apple Health / Health Connect import, widgets, Android parity polish | — |
@@ -271,7 +270,6 @@ Game-rule questions (multiple groups, time zones, ties, rest-day votes) are deci
 
 | # | Question | Current lean |
 |---|---|---|
-| Q3 | Who can edit the punishment, admins only or any member? | Admins only in v0.1 |
 | Q5 | Can a user opt in to sharing their goal with the group? | Yes, opt-in, v0.2 |
 | Q6 | Check-in challenges: mechanics and resolution | Defer to after v0.1 |
 | Q7 | Calorie formula for users who don't select a formula sex | Average of both formulas, clearly labeled |

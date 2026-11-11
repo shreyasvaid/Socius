@@ -7,7 +7,7 @@
 | **Last updated** | 2026-11-11 |
 | **Audience** | Contributors |
 
-> How Socius is built. What it does and why lives in the [product requirements](product-requirements.md) (PRD); requirement IDs (`FR-x`, `G-x`, `Q-x`) refer to that document. The weekly game engine (scoring, weeks, the close job, its data model and API) is designed in detail in [`designs/weekly-game-engine.md`](designs/weekly-game-engine.md); this document links to it instead of restating it. Significant decisions get an ADR in [`adr/`](adr/); feature-level detail goes in a spec in `specs/`. When implementation proves part of this wrong, update the doc in the same PR.
+> How Socius is built. What it does and why lives in the [product requirements](product-requirements.md) (PRD); requirement IDs (`FR-10`, and goals and questions such as `G1` and `Q5`) refer to that document; the engine design numbers its own goals G1–G7, so this document always says "engine design G1" for those. The weekly game engine (scoring, weeks, the close job, its data model and API) is designed in detail in [`designs/weekly-game-engine.md`](designs/weekly-game-engine.md); this document links to it instead of restating it. Significant decisions get an ADR in [`adr/`](adr/); feature-level detail goes in a spec in `specs/`. When implementation proves part of this wrong, update the doc in the same PR.
 
 ---
 
@@ -65,13 +65,13 @@ Key properties:
 | API client | openapi-typescript + openapi-fetch | hey-api, orval | Small generated output; requests visible in plain code ([D3](designs/weekly-game-engine.md#d3-options-decided-a)) |
 | API | Python, FastAPI, Pydantic v2 | Node/TS | Gives the backend real weight; auto OpenAPI |
 | ORM / migrations | SQLAlchemy 2.x (synchronous, psycopg 3) + Alembic | async SQLAlchemy, raw SQL | Typed models, versioned migrations; sync keeps the job and concurrency tests simple (D4) |
-| Database | PostgreSQL | Firestore | Relational data: groups, members, check-ins, results |
-| Auth | Supabase Auth (JWT verified in FastAPI) | Clerk / roll our own | Rolling our own is a time sink and a security risk |
+| Database | PostgreSQL 17 | Firestore | Relational data: groups, members, check-ins, results. Version 17 for `transaction_timeout` |
+| Auth | Supabase Auth (JWT verified in FastAPI; proposed, ADR-0004) | Clerk / roll our own | Rolling our own is a time sink and a security risk |
 | Storage | Supabase Storage or Cloudflare R2 (S3 API) | DB blobs | Cheap, standard, signed URLs |
 | Jobs | APScheduler inside the API process, plus close on read; idempotent | host cron, external scheduler | One deployable service; results correct even if the scheduler sleeps ([D2](designs/weekly-game-engine.md#d2-options-decided-b-plus-close-on-read)) |
 | Push | Expo Push Notifications | FCM/APNs direct | One API, both platforms |
 | Monitoring | Error tracker (Sentry), uptime monitor, heartbeat monitor | none | A missed weekly close must be noticed |
-| Hosting | Fly.io / Render / Railway (API); managed Postgres | AWS | Least ops; verify the host allows keep-alive pings on its free tier |
+| Hosting | Render free web service (API), kept awake by an uptime ping; Postgres hosted separately (Supabase or Neon) | Fly.io (no free tier for new organizations), Railway (trial, then $1/month credit), AWS | Least ops at no cost; Render's free Postgres expires after 30 days. [Details](designs/weekly-game-engine.md#the-close) |
 | Python tooling | uv, ruff, pyright (strict), pytest, Hypothesis, Schemathesis | pip/poetry, mypy | Fast, modern, strict |
 | JS tooling | pnpm workspaces, ESLint, Prettier, tsc, Jest + RNTL | npm/yarn | Workspaces for the monorepo |
 | Task runner | `just` (root `justfile`) | Make, Bazel, Nx, Turborepo | One command per task for humans and CI; sized to three packages |
@@ -101,7 +101,7 @@ profiles           user_id (PK/FK), dob, goal, formula_sex, height_cm, weight_kg
                    activity_level, target_rate, body_fat_pct          -- private
 invites            id, group_id, code, created_by, expires_at, revoked_at   -- spec 0001
 check_in_photos    id, check_in_id, storage_key, created_at
-notification_prefs user_id, category, enabled
+notification_prefs user_id, category, enabled, reminder_local_time   -- default 19:00
 -- v0.2+
 calorie_targets    user_id, effective_from, kcal, protein_g, carbs_g, fat_g
 food_entries       id, user_id, eaten_at, name, kcal, protein_g, carbs_g, fat_g, source (manual|photo)
@@ -110,7 +110,8 @@ food_entries       id, user_id, eaten_at, name, kcal, protein_g, carbs_g, fat_g,
 Notes:
 
 - `check_ins` is keyed by **user + local date, not group**. That's what lets one workout count in every group ([PRD FR-15](product-requirements.md#53-check-ins-v01)) without duplicate rows.
-- Fact tables use `recorded_at` (server time) and `removed_at` (undo, withdraw, revoke) instead of deleting rows.
+- The check-in, skip-token and excusal tables use `recorded_at` (server time) and `removed_at` (undo, withdraw, revoke) instead of deleting rows.
+- Reminders use `notification_prefs.reminder_local_time` and the phone's current zone, stored on `push_tokens.tz_name` (private).
 - `week_results` and `week_member_results` are written once at close; they are the source of truth for history.
 
 ---
@@ -137,9 +138,9 @@ GET    /groups/{id}/weeks/{date}                       (live or final; closes on
 PUT    /groups/{id}/weeks/{date}/skip-token            DELETE (withdraw)
 PUT    /groups/{id}/weeks/{date}/excusals/{userId}     DELETE (revoke)
 GET    /groups/{id}/settings                PUT   /groups/{id}/settings  (applies next week)
-
-GET    /healthz                             (no auth; keep-alive target)
 ```
+
+Outside `/v1`: `GET /healthz` (no auth; the keep-alive target).
 
 Errors follow RFC 9457 (problem+json) with stable codes. Timestamps in ISO 8601 UTC; dates as `YYYY-MM-DD` (the phone's local date).
 
@@ -189,7 +190,7 @@ All steps call `just` recipes, so CI and local runs are the same commands.
 ### 7.3 Environments
 
 - `local`: Docker Compose Postgres + API; Expo dev client.
-- `staging`: deployed on merge to `main`; TestFlight/internal builds point here. `FAKE_NOW` may be set here to test the weekly close; startup refuses it in production.
+- `staging`: deployed on merge to `main`; TestFlight/internal builds point here. `FAKE_NOW` may be set here to test the weekly close; startup refuses it in production. A free tier covers one always-on service, so staging is started when needed rather than always on.
 - `prod`: once there are real users beyond the test group.
 
 Secrets via host secret managers; never committed. `.env.example` documents required variables.
