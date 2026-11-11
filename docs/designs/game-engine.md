@@ -3,7 +3,7 @@
 *   **Author:** Shreyas Vaid
 *   **Status:** Accepted (revised 2026-11-11 by [ADR-0011](../adr/0011-group-periods.md))
 *   **Date:** 2026-11-11
-*   **Review:** the first version (fixed weeks, a global Monday cutoff) was reviewed by fresh-context reviewers for scope, comprehension, design, cross-document consistency and technical viability. This revision replaces its time model with group periods and drops skip tokens; the close, testing and tooling designs carry over. A dedicated implementation-readiness review of the plan has not been run.
+*   **Review:** the first version (fixed weeks, a global Monday cutoff) was reviewed by fresh-context reviewers for scope, comprehension, design, cross-document consistency and technical viability. This revision replaces its time model with group periods and drops skip tokens; the close, testing and tooling designs carry over. The revision was then reviewed again by a fresh-context reviewer for errors, consistency and logic holes, and its findings resolved (2026-11-11). A dedicated implementation-readiness review of the plan has not been run.
 
 --------------------------------------------------------------------------------
 
@@ -59,7 +59,7 @@ A mistake in any of these produces a wrong loser. In a small group of friends, o
 *   **G1. Correct results with no manual work.**
     *   Every group's period ends in exactly one stored result, whether or not there is a loser.
     *   The scheduled job writes the result within 15 minutes of the period's end. If the job didn't run, the first read of that period after its end writes it.
-    *   Over a four-week trial with the test group (the first group of 4–5 people to use the app), no result is changed or computed by hand. A non-zero late-write mismatch count (see "Close protection") during the trial counts as a failure of this goal.
+    *   Over a trial with the test group (the first group of 4–5 people to use the app) of at least four closed 7-day periods, no result is changed or computed by hand. A non-zero late-write mismatch count (see "Close protection") during the trial counts as a failure of this goal.
     *   The trial also needs groups and invites, which spec 0001 (groups and invites) covers, not this design.
 *   **G2. Rerunning gives the same answer.** Running the close any number of times, including two copies at once, produces the same stored result and the same loser. Tests check this against a real Postgres database.
 *   **G3. The rules are written down and tested.** Every scoring rule is stated as an invariant in this document, and each invariant has a named test. Rules that are pure functions get property-based tests; rules that depend on the database get API or concurrency tests. The Testing approach section says which is which.
@@ -93,22 +93,23 @@ These are the game rules in force. Every other section refers here instead of re
 | Topic | Rule |
 |---|---|
 | **Group time zone** | <ul><li>Each group stores one IANA time zone, set from the creator's phone when the group is created.</li><li>All of the group's deadlines are midnight in this zone. Members' own zones don't matter.</li><li>Changing it is an admin setting that takes effect from the next period, so an admin who travels doesn't move the current deadline.</li></ul> |
-| **Period** | <ul><li>A whole number of days, from 1 to 365 **[default range]**, set by the admin.</li><li>A period starts at midnight in the group's zone and ends at midnight after its last day. The next period starts the moment the previous one ends.</li><li>The admin picks the first period's start date, which defaults to the next midnight in the group's zone. Until then the group is set up but not playing. **[default]**</li></ul> |
+| **Period** | <ul><li>A whole number of days, from 1 to 365 **[default range]**, set by the admin.</li><li>A period starts at the start of a day in the group's zone (local midnight, or the first instant of the day where daylight saving skips midnight) and ends at the start of the day after its last day. The next period starts the moment the previous one ends.</li><li>After a time-zone change, the next period starts where the previous one ended and ends at the start of a day in the new zone, so that one period is a few hours shorter or longer than its set length.</li><li>The game starts when the admin taps **Start**: the first period begins at the next start of a day in the group's zone, and everyone who joined before then plays it. Until then the group is set up but not playing. **[default]**</li></ul> |
 | **Target** | The admin sets one target N, from 1 to 100 **[default range]**. It is the same for every member. |
-| **Check-ins** | <ul><li>A check-in counts in every group whose current period is open at the moment the server receives it (`recorded_at`).</li><li>No per-day limit: each check-in is one point.</li><li>A check-in that reaches the server after a period ended counts in the next period, not the ended one, even if the workout happened earlier (for example offline). Honor system throughout.</li></ul> |
-| **Points** | `points = min(N, counted check-ins in the period)`. For a member who joined mid-period, only check-ins after they joined count. |
-| **Undo** | <ul><li>A member can undo any of their own check-ins as long as every period it counts in is still open.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
-| **Excusal** | <ul><li>Only an admin can excuse a member for a period, including themselves, for any reason, any time before the period ends.</li><li>An excused member can't lose that period.</li><li>The reason is never stored. The group sees who was excused and by whom.</li><li>An excusal can be revoked before the period ends.</li></ul> |
+| **Check-ins** | <ul><li>A check-in counts in every group the member belongs to whose current period is open at the moment the server records it (`recorded_at`).</li><li>No per-day limit: each check-in is one point.</li><li>A check-in that reaches the server after a period ended counts in the next period, not the ended one, even if the workout happened earlier (for example offline). Honor system throughout.</li></ul> |
+| **Points** | `points = min(N, counted check-ins in the period)`. Only check-ins made while the member belonged to the group count: after `joined_at` and, for a removed member, before `removed_at`. |
+| **Undo** | <ul><li>A member can undo any of their own check-ins as long as every period it counts in is still open. Once the earliest of those deadlines passes, it can't be undone in any group; per-group undo is a possible future improvement.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
+| **Excusal** | <ul><li>Only an admin can excuse a member for a period, including themselves, for any reason, any time before the period ends.</li><li>An excused member can't lose that period.</li><li>The reason is never stored. The group sees who was excused and by whom.</li><li>An excusal can be revoked before the period ends.</li><li>Excusals apply to the current period only; one can't be entered ahead for a future period.</li></ul> |
 | **Roles** | <ul><li>Two roles, `admin` and `member`. The creator is the first admin.</li><li>A group can have more than one admin. Promoting a member and stepping down are defined in spec 0001. **[default]**</li></ul> |
-| **Membership** | <ul><li>Members can't leave on their own; only an admin can remove a member.</li><li>A member removed during a period keeps their state for it and can still lose it. They can still read that period's result and get its results notification. **[default]**</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group.</li></ul> |
-| **Group size** | At most 8 active members per group. Enforced when a member joins (spec 0001). |
+| **Membership** | <ul><li>Members can't leave on their own; only an admin can remove a member.</li><li>A member removed during a period keeps their state for it and can still lose it. They can still read that period's result and get its results notification. **[default]**</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group, and the deleted member is treated as excused in each current period, so they can't lose it. **[default]** Their check-ins keep their `user_id`, so closed results never change; the `users` row is anonymized instead.</li></ul> |
+| **Group size** | At most 8 active members per group, enforced when a member joins (spec 0001). A period's member set can be larger if members were removed and replaced during it. |
 | **Joining** | A member who joins after a period has started can't lose that period. Their check-ins after joining still show as points. |
 | **Settings changes** | Changes to N, period length, time zone or punishment text take effect from the next period. The current period never changes. |
+| **Idle groups** | A group with nobody checking in still closes each period, and with everyone at 0 one member loses at random. Accepted for v0.1; pausing a group is a future improvement. |
 | **Loser** | See "Eligibility and the loser rule". |
 
 **Still open:**
 
-*   **Deleted accounts in past results.** How a member who deleted their account appears in history. An "Anonymous member" label is likely. The account-deletion spec decides.
+*   **Deleted accounts in past results.** The label shown for an anonymized member in history (likely "Deleted member"). The account-deletion spec decides; it is part of v0.1 (PRD FR-4).
 *   **The only admin deletes their account.** Who becomes admin? Spec 0001 decides.
 
 --------------------------------------------------------------------------------
@@ -119,9 +120,9 @@ These are the game rules in force. Every other section refers here instead of re
 
 *   **Given**:
     *   Alex is in group A (zone America/Chicago, 7-day periods, N = 4) and group B (zone Europe/London, 14-day periods, N = 6).
-    *   Group A's current period ends Monday 00:00 Chicago time. Group B's ends a week later.
-    *   Alex lives in Tokyo.
-*   **When**: Alex checks in at 13:00 Monday Tokyo time, which is 22:00 Sunday Chicago time.
+    *   It's January (Chicago is on standard time, UTC−6). Group A's current period ends Monday 00:00 Chicago time. Group B's ends a week later.
+    *   Alex lives in Tokyo (UTC+9).
+*   **When**: Alex checks in at 14:00 Monday Tokyo time, which is 23:00 Sunday Chicago time.
 *   **Then**:
     *   One check-in is stored.
     *   It counts in group A's current period (still open in Chicago) and in group B's current period.
@@ -228,13 +229,13 @@ The cost is that every leaderboard view recomputes scores. A group has at most 8
 
 ### Time model
 
-*   **Group time zone.** Each group's settings hold one IANA zone. Period boundaries are midnights in that zone, computed with `zoneinfo`, so daylight-saving changes are handled: a 7-day period that crosses a DST change is 167 or 169 hours long, and still ends at midnight.
+*   **Group time zone.** Each group's settings hold one IANA zone. Period boundaries are the start of a local day in that zone, computed with `zoneinfo`, so daylight-saving changes are handled: a 7-day period that crosses a DST change is 167 or 169 hours long. In zones where DST skips midnight (for example America/Santiago or Asia/Beirut), the boundary is the first instant of the day, 01:00 local.
 *   **Periods.**
-    *   The first period starts at midnight at the start of the admin's chosen first day.
-    *   Each period ends at midnight after its last day: `ends_at = midnight(local_date(starts_at) + period_days)` in the period's zone.
+    *   The first period starts at the next start of a day after the admin taps Start.
+    *   Each period ends at the start of the day after its last day: `ends_at = day_start(local_date(starts_at) + period_days)` in the period's zone.
     *   The next period starts exactly at the previous `ends_at`, so periods never overlap and never leave a gap. If the zone changes between periods, the new period's end is computed in the new zone from the same start instant.
-*   **Which period a check-in is in.** A check-in counts in a group's period if `starts_at ≤ recorded_at < ends_at`. `recorded_at` is the server's time, set immediately before the check-in commits, so it is never later than the commit by more than the transaction timeout.
-*   **Members' zones.** Not stored or used for scoring. The app shows each deadline converted to the member's local time.
+*   **Which period a check-in is in.** A check-in counts in a group's period if `starts_at ≤ recorded_at < ends_at` and the member belonged to the group at `recorded_at`. `recorded_at` is the server's time, set immediately before the check-in commits, so the commit happens at most one transaction timeout (30 seconds) after it.
+*   **Members' zones.** Not stored or used for scoring. The app shows every time (deadlines and check-in times) converted to the member's local time.
 *   **The closing window.** Between a period's end and 5 minutes after it, the period is `closing`: writes for it are rejected, the close hasn't run yet, and reads return live scores with `status: closing` and no candidates.
 *   **Clock injection.** All code that needs the current time takes it from a `Clock` object passed in. Business logic never calls `datetime.now()` or uses Postgres `now()` or `DEFAULT now()`. The same fake clock is injected into both the API and the close in tests.
 *   **Clock skew.** Hosts use NTP. A few seconds of skew between processes is absorbed by the 5-minute close delay.
@@ -248,12 +249,12 @@ Each member in the set is in exactly one state:
 | State | Condition | Can lose? |
 |---|---|---|
 | `joined_mid_period` | `joined_at > starts_at` | no |
-| `excused` | an active excusal exists for P, and they didn't join mid-period | no |
+| `excused` | an active excusal exists for P, or their account was deleted during P, and they didn't join mid-period | no |
 | `eligible` | everyone else | yes |
 
 Joining mid-period takes precedence over an excusal. Both mean "can't lose", so the order only affects the label shown.
 
-**Points:** active check-ins with `starts_at ≤ recorded_at < ends_at` (and, for a mid-period joiner, `recorded_at ≥ joined_at`), up to N.
+**Points:** active check-ins with `starts_at ≤ recorded_at < ends_at`, made while the member belonged to the group (`recorded_at ≥ joined_at`, and `recorded_at < removed_at` if removed), up to N.
 
 **Loser rule** (pure function, applied to eligible members only):
 
@@ -270,8 +271,8 @@ Joining mid-period takes precedence over an excusal. Both mean "can't lose", so 
 ### Data model (game engine only)
 
 ```text
-groups                id, name, first_period_start_date, created_by, created_at
-                      PK (id)
+groups                id, name, started_at, created_by, created_at
+                      PK (id)                -- started_at: when the admin tapped Start
 group_settings        group_id, target_n (1..100), period_days (1..365), tz_name,
                       punishment_text, updated_by, updated_at
                       PK (group_id)          -- settings for the next period
@@ -292,8 +293,8 @@ excusals              id, period_id, user_id, excused_by, recorded_at, removed_a
                       PK (id); UNIQUE (period_id, user_id) WHERE removed_at IS NULL
 push_tokens           id, user_id, token, platform, tz_name, recorded_at
                       PK (id); UNIQUE (token)
-notification_outbox   id, user_id, kind, payload (jsonb), created_at, sent_at,
-                      expo_ticket_id, receipt_checked_at
+notification_outbox   id, user_id, kind, payload (jsonb), created_at, claimed_at,
+                      sent_at, expo_ticket_id, receipt_checked_at
 job_runs              id, started_at, finished_at, periods_closed,
                       groups_failed, overdue, mismatches, error
 ```
@@ -301,10 +302,12 @@ job_runs              id, started_at, finished_at, periods_closed,
 *   **Settings.** `group_settings` always holds the settings for the *next* period. When a period row is created, it copies them, so a change never affects a period that already exists, and history never changes.
 *   **Periods.**
     *   A period row is created ahead of use by `ensure_current_period(group, now)`, which inserts any missing periods up to the one containing `now` with `INSERT … ON CONFLICT (group_id, seq) DO NOTHING`, so concurrent callers can't create duplicates.
-    *   The check-in, period-read and close paths all call it.
+    *   The check-in, period-read, settings-update and close paths all call it. Each group's call runs in its own short transaction, in `group_id` order, before the caller's own transaction, so two requests creating periods for overlapping groups can't deadlock.
+    *   The settings update calls it first so the period that is already running exists before `group_settings` changes; otherwise a change made just after a deadline could be copied into a period that has already started.
     *   A check-in doesn't need its period row to exist yet: it is matched to periods by time.
 *   **Results.** A period's result lives on its own row (`closed_at` and the result columns are null while open), plus `period_member_results`. Closing is an `UPDATE … WHERE closed_at IS NULL`, so a second close changes nothing.
-*   **Check-ins.** They have no group. One row counts in every group whose period contains its `recorded_at`, subject to the joining rule.
+*   **Check-ins.** They have no group. One row counts in every group whose period contains its `recorded_at` and that the member belonged to at that moment.
+*   **Account deletion.** Check-ins and memberships keep their `user_id`; the `users` row is anonymized (name removed, `deleted_at` set). Removing rows would lower past points and break closed results.
 *   **Retries.** `client_request_id` stays unique on every row, including removed ones. A retried request, even one arriving after an undo, can't create a second check-in.
 *   **Timestamps.** `check_ins` and `excusals` use `recorded_at` (server time when written) and `removed_at` (set by undo or revoke) instead of deleting rows. `memberships` uses `joined_at` and `removed_at`.
 *   **Partial unique indexes.** Each `UNIQUE … WHERE` above is a unique *index*, not a table constraint (SQLAlchemy: `Index(..., unique=True, postgresql_where=...)`). An `INSERT … ON CONFLICT` against one must repeat its `WHERE` predicate (SQLAlchemy: `index_where=`).
@@ -313,7 +316,7 @@ job_runs              id, started_at, finished_at, periods_closed,
 
 ### Request rules (API)
 
-Every write that touches period `P` checks `clock.now() < P.ends_at` when the request starts and again immediately before commit, and rejects with `period-closed` otherwise. Each error is an RFC 9457 problem response with a stable `code` the app maps to a message.
+Every write that touches period `P` (undo, excuse, revoke) checks `clock.now() < P.ends_at` when the request starts and again immediately before commit, and rejects with `period-closed` otherwise. Each error is an RFC 9457 problem response with a stable `code` the app maps to a message.
 
 **Every group endpoint** returns 404 `not-member` when the caller isn't an active member, so the response doesn't reveal that the group exists. One exception: a removed member can still `GET` any period whose member set includes them.
 
@@ -323,8 +326,8 @@ Every write that touches period `P` checks `clock.now() < P.ends_at` when the re
 | Undo check-in | own active check-in only; every period it counts in must still be open; sets `removed_at` | `not-found`, `period-closed` |
 | Excuse member | admin only; target must be in P's member set; before P ends | `not-admin`, `target-not-member`, `period-closed` |
 | Revoke excusal | admin only; an active excusal must exist; before P ends | `not-admin`, `not-found`, `period-closed` |
-| Change settings (N, period length, time zone, punishment text) | admin only; N 1–100, period 1–365 days, a valid IANA zone; applies from the next period | `not-admin`, `invalid-settings` |
-| Create group, set the first start date, join, remove, re-add, promote, step down | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
+| Change settings (N, period length, time zone, punishment text) | admin only; N 1–100, period 1–365 days, a valid IANA zone (out-of-range values are rejected by request validation); applies from the next period | `not-admin`, `invalid-request` |
+| Create group, Start, join, remove, re-add, promote, step down | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
 
 ### The close
 
@@ -340,8 +343,8 @@ The two triggers:
 
 *   **Scheduled (D2).**
     *   APScheduler inside the FastAPI process runs `close_periods` every 5 minutes.
-    *   `close_periods` first calls `ensure_current_period` for every group that has started, then calls `close_period` for every period that is due (ended at least 5 minutes ago, not closed) and ended in the last 30 days. An older unclosed period is reported as an error, not closed.
-    *   Then it sends up to 100 unsent outbox rows through Expo Push (Expo's per-request limit) and marks them sent, storing each push ticket ID. It also fetches receipts for tickets sent at least 15 minutes earlier and deletes push tokens Expo reports as `DeviceNotRegistered`.
+    *   `close_periods` first calls `ensure_current_period` for every group that has started, then calls `close_period` for every period that is due (ended at least 5 minutes ago, not closed), oldest first.
+    *   Then it claims up to 100 unsent outbox rows (`UPDATE … SET claimed_at = now WHERE claimed_at IS NULL OR claimed_at < now − 10 min … RETURNING`, committed before sending, so a concurrent run can't take the same rows), sends them through Expo Push (Expo's per-request limit) and marks them sent, storing each push ticket ID. The push data carries the `group_id` and period `seq` so the app can open that result. It also fetches receipts for tickets sent at least 15 minutes earlier and deletes push tokens Expo reports as `DeviceNotRegistered`.
 *   **On read (D2 addition).** `GET` for a period that is due but not closed calls `close_period` before responding. Results are then correct whenever someone looks; only notification timing depends on the scheduler.
 
 **Each scheduled run also:**
@@ -363,6 +366,8 @@ The two triggers:
 *   **Railway** offers a 30-day trial, then $1 of credit a month, which doesn't keep a service running all month.
 
 The plan is Render's free tier with the uptime ping. The fallback is a small always-on machine (for example on Fly.io, likely billed under $5 and waived), which needs the author's approval because it requires a card and may cost money.
+
+**Migrations.** Alembic runs as a separate migration role without the 30-second timeouts, so a long migration isn't cut off.
 
 **Close protection (D1, decided: time check plus delay, with bounded transactions and rescore detection):**
 
@@ -405,12 +410,12 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 4.  The loser is always eligible, and always has the lowest points among eligible members.
 5.  Adding, removing or changing the check-ins of `joined_mid_period` or `excused` members never changes who the candidates are.
 6.  The same inputs give the same candidates, regardless of input order.
-7.  Check-ins outside `[starts_at, ends_at)`, or before a mid-period joiner's `joined_at`, never change that member's points.
-8.  For every zone, start and length, `ends_at` is midnight in the zone, its local date is the start's local date plus `period_days`, and `ends_at > starts_at`, including across daylight-saving changes.
+7.  Check-ins outside `[starts_at, ends_at)`, before a member's `joined_at`, or at or after their `removed_at`, never change that member's points.
+8.  For every zone, start and length, `ends_at` is the first instant of its local day in the zone, its local date is the start's local date plus `period_days`, and `ends_at > starts_at`, including across daylight-saving changes and zones where DST skips midnight.
 9.  Successive periods are contiguous: each period's `starts_at` equals the previous period's `ends_at`.
 10. Running the close any number of times, through either trigger and including concurrently, leaves exactly one result per period, with the same loser.
 11. A settings change never changes a period that already exists.
-12. Removing a member during a period doesn't change their state or points for it.
+12. Removing a member during a period doesn't change their state for it, or the points they had when removed.
 13. An undo, excusal or revocation that would change an ended period is rejected.
 
 ### Decisions in this section
@@ -561,7 +566,7 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 
 #### Alternative M: Compute periods from the settings history, with no period rows
 
-*   **How it works:** Derive every period's boundaries on the fly from the first start date and the history of length and zone changes.
+*   **How it works:** Derive every period's boundaries on the fly from the start time and the history of length and zone changes.
 *   **Pros:** One less table.
 *   **Cons:** Every read replays the whole settings history, and a bug in that replay silently moves past deadlines.
 *   **Reason for Rejection:** Rejected: a stored row per period fixes its boundaries and settings once. The cost is creating rows ahead of use, which `ensure_current_period` does idempotently.
@@ -618,11 +623,11 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 ## Non-Functional Requirements
 
 *   **Privacy.**
-    *   Group members see each other's points and check-in times, shown in the group's time zone. Members' own time zones are never stored with check-ins; the phone's current zone is stored only on `push_tokens` for reminders, and is never returned to anyone.
+    *   Group members see each other's points and check-in times, shown in each viewer's local time. Members' own time zones are never stored with check-ins; the phone's current zone is stored only on `push_tokens` for reminders, and is never returned to anyone.
     *   The reason for an excusal is never stored.
     *   Every group endpoint checks that the caller is an active member (or, for reading a period, was in its member set). Admin endpoints also check `role = admin`. Both rules have tests.
 *   **Performance.**
-    *   Live leaderboard reads recompute scores from at most a few hundred rows. No caching layer is added.
+    *   Live leaderboard reads load at most N check-in times per member (filtered and capped in SQL) instead of every row, because check-ins have no per-day limit. No caching layer is added. A per-user rate limit on check-ins is deferred; the risk is listed below.
     *   At roughly 50 ms per period, one scheduled run closes about 1,200 periods a minute, far above v0.1 needs. Revisit at 1,000 groups.
 *   **Rollout.**
     *   Nothing is deployed yet, so there is no data to migrate. The first Alembic migration creates the schema in this document.
@@ -648,7 +653,8 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 | A late write commits after the close | One member's count differs from the saved result | 30-second transaction timeout; 5-minute delay | Rescore mismatch count (G1 failure if non-zero) |
 | An admin excuses themselves just before the deadline | An admin dodges a loss | Excusals are visible to the group with who made them | Visible on the result screen (accepted risk) |
 | A member banks many check-ins on the last day | Points reflect taps, not training | Honor system; check-in times are visible to the group | Accepted risk |
-| A group goes idle for months | Each elapsed period still closes with a loser (everyone at 0) | Expected under the rules; pausing a group is a future improvement | Visible in history |
+| A member or a bug floods check-ins | Database growth | Reads load at most N check-ins per member; add a per-user rate limit if it happens | Database size; error tracker |
+| A group goes idle for months | Each elapsed period still closes with a loser (everyone at 0) and sends a notification | Expected under the rules (Decided Rules, Idle groups); pausing a group is a future improvement | Visible in history |
 | Deleted accounts in history | Results show a missing member | Still open; account-deletion spec decides | — |
 
 --------------------------------------------------------------------------------
@@ -661,6 +667,8 @@ These ideas were deferred, not rejected:
 *   **Closing a period early.** A period could close as soon as its result can no longer change, for example when every eligible member has reached N.
 *   **A tie-break members can verify.** Publish a hash of a seed when the period opens and reveal the seed at close, so any member can recompute the draw. This needs a seed column and the encoding described in Alternative N. It pairs with the deferred suspense animation.
 *   **Pausing a group.** An admin could pause a group so idle periods don't produce losers.
+*   **Per-group undo.** Undo a check-in in groups whose period is still open, even after another group's deadline passed.
+*   **Excusals in advance.** Excuse a member for a future period, for planned travel.
 
 --------------------------------------------------------------------------------
 
@@ -705,7 +713,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 |---|---|
 | `setup` | `pnpm install` and `uv sync` |
 | `db-up` / `db-down` | Docker Compose |
-| `migrate` | `alembic upgrade head` |
+| `migrate` | `alembic upgrade head`, as the migration role |
+| `db-reset` | drop the local Docker volume and recreate the databases and roles |
 | `dev` | API with reload, plus the Expo dev server once `apps/mobile` exists |
 | `test` | `test-api`, plus `test-mobile` once `apps/mobile` exists |
 | `test-api` | pytest |
@@ -746,7 +755,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 #### 8. `docker/postgres-init/01-create-test-db.sql` (Create)
 
 *   **Type / Scope:** Postgres init script.
-*   **Proposed Changes:** Creates `socius_test`, and creates the application role with the timeouts from "Close protection" (`ALTER ROLE … SET transaction_timeout = '30s'`, and the same for the other two). Used locally only; CI does the same in a workflow step.
+*   **Proposed Changes:** Creates `socius_test`, the application role with the timeouts from "Close protection" (`ALTER ROLE … SET transaction_timeout = '30s'`, and the same for the other two), and a migration role without them. Used locally only; CI does the same in a workflow step.
 
 #### 9. `.github/workflows/ci.yml` (Create)
 
@@ -791,8 +800,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Proposed Changes:**
     *   **Types:** `PeriodBounds(starts_at: datetime, ends_at: datetime)`, aware UTC.
     *   **Functions:**
-        *   `local_midnight(day: date, tz_name: str) -> datetime`: midnight at the start of `day` in the zone, as UTC.
-        *   `first_period(start_day: date, tz_name: str, period_days: int) -> PeriodBounds`
+        *   `day_start(day: date, tz_name: str) -> datetime`: the first instant of `day` in the zone, as UTC (local midnight, or the first existing time when daylight saving skips midnight).
+        *   `first_period(started_at: datetime, tz_name: str, period_days: int) -> PeriodBounds`: begins at the next `day_start` after `started_at`.
         *   `next_period(previous_ends_at: datetime, tz_name: str, period_days: int) -> PeriodBounds`: starts at `previous_ends_at`; ends at midnight after `period_days` local days, computed from the start's local date in `tz_name`.
         *   `contains(bounds, instant) -> bool`: `starts_at ≤ instant < ends_at`.
         *   `close_due_at(bounds) -> datetime`: `ends_at + 5 min`.
@@ -808,7 +817,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `MemberPeriodInput`:
             *   `user_id: UUID`
             *   `joined_at: datetime`
-            *   `excused: bool`
+            *   `removed_at: datetime | None`
+            *   `excused: bool` (an active excusal, or the account was deleted during the period)
             *   `check_in_times: tuple[datetime, ...]`, active check-ins only
         *   `MemberScore`: `user_id`, `state`, `counted_check_ins`, `points`.
         *   `PeriodOutcome`:
@@ -817,7 +827,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
             *   `kind`: one of `NO_LOSER_TOO_FEW_ELIGIBLE`, `NO_LOSER_ALL_REACHED_TARGET`, `SINGLE_LOSER`, `TIEBREAK_NEEDED`
     *   **Functions:**
         *   `member_state(joined_at, excused, bounds) -> MemberState`. Joining mid-period takes precedence over an excusal.
-        *   `points(member, target_n, bounds) -> int`. It counts check-ins inside the bounds and, for a mid-period joiner, at or after `joined_at`, up to `target_n`.
+        *   `points(member, target_n, bounds) -> int`. It counts check-ins inside the bounds, at or after `joined_at` and before `removed_at`, up to `target_n`.
         *   `score_period(target_n: int, bounds: PeriodBounds, members: Sequence[MemberPeriodInput]) -> PeriodOutcome`
         *   `pick_loser(candidates: Sequence[UUID], choose: Callable[[Sequence[UUID]], UUID] = secrets.choice) -> UUID`. It sorts the candidates by UUID, then calls `choose`. Tests pass a fixed `choose`.
     *   **Version:** `SCORING_VERSION = 1`.
@@ -831,9 +841,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Hypothesis strategies.
 *   **Proposed Changes:**
-    *   **Zones:** a fixed list of IANA zones that includes ones with and without daylight saving, half-hour and 45-minute offsets, and the extremes (`Pacific/Kiritimati`, `Etc/GMT+12`).
+    *   **Zones:** a fixed list of IANA zones that includes ones with and without daylight saving, half-hour and 45-minute offsets, the extremes (`Pacific/Kiritimati`, `Etc/GMT+12`), and zones where daylight saving skips or repeats midnight (`America/Santiago`, `America/Havana`, `Asia/Beirut`).
     *   **Periods:** start days between 2020 and 2040, lengths 1–365.
-    *   **Members:** members with random join times, excusals and check-in times inside and around a period; groups of 1–8 members.
+    *   **Members:** members with random join times, removal times, excusals and check-in times inside and around a period; member sets of 1–12 (up to 8 active, plus members removed during the period).
     *   **Targets:** `target_n` from 1 to 100.
 
 #### 16. `services/api/tests/domain/test_periods.py` (Create)
@@ -917,15 +927,16 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Query functions, the only place SQL lives. They are plain functions, not repository classes: there is only one implementation, so an abstraction layer adds nothing.
 *   **Proposed Changes:**
     *   **Periods:**
-        *   `ensure_current_period(session, group_id, now) -> Period | None`: inserts any missing periods up to the one containing `now`, using `domain.periods` and the current `group_settings`, with `INSERT … ON CONFLICT (group_id, seq) DO NOTHING`. Returns `None` before the group's first start date.
-        *   `period_by_seq(session, group_id, seq)`, `periods_containing(session, user_id, instant)`: the period in each of the user's groups that contains `instant`.
-    *   **Inputs:** `load_period_inputs(session, period) -> list[MemberPeriodInput]`: the member set, active excusals, and active check-ins inside the period's bounds.
+        *   `ensure_current_period(session_factory, group_id, now) -> Period | None`: in its own short transaction, inserts any missing periods up to the one containing `now`, using `domain.periods` and the current `group_settings`, with `INSERT … ON CONFLICT (group_id, seq) DO NOTHING`. Returns `None` before the group has started. Callers that handle several groups call it in `group_id` order.
+        *   `period_by_seq(session, group_id, seq)`, `list_periods(session, group_id, before_seq, limit)`.
+        *   `periods_counting(session, user_id, check_in)`: the periods a check-in counts in (groups the user belonged to at its `recorded_at`).
+    *   **Inputs:** `load_period_inputs(session, period) -> list[MemberPeriodInput]`: the member set (with `joined_at` and `removed_at`), active excusals, and each member's check-in times inside the period while they belonged to the group, at most N per member (SQL `row_number() … ≤ N`), so the load stays bounded even though check-ins have no per-day limit. `score_period` still applies every rule itself.
     *   **Close:**
-        *   `due_periods(session, now, lookback_days=30)`: periods not closed whose `ends_at + 5 min ≤ now`.
+        *   `due_periods(session, now)`: periods not closed whose `ends_at + 5 min ≤ now`, oldest first.
         *   `lock_period(session, period_id)`: calls the blocking `pg_advisory_xact_lock(hashtextextended(period_id::text, 0))`. `hashtextextended` (PostgreSQL 11+) gives a 64-bit key; a collision only makes two closes wait for each other.
         *   `save_result(...) -> bool`: `UPDATE periods SET … WHERE id = :id AND closed_at IS NULL`; returns false if the period was already closed.
         *   `recently_closed(session, now, hours=24)`, `saved_member_results(session, period_id)`, `count_overdue(session, now)`.
-    *   **Outbox:** `unsent_outbox(session, limit=100)` uses `FOR UPDATE SKIP LOCKED`; `mark_sent(...)`.
+    *   **Outbox:** `claim_outbox(session, now, limit=100)` sets `claimed_at` with `UPDATE … RETURNING` on rows unclaimed or claimed more than 10 minutes ago, and commits before sending; `mark_sent(...)`.
 
 #### 25. `services/api/src/socius_api/clock.py` (Create)
 
@@ -965,16 +976,15 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **Handler:** an exception handler that returns `application/problem+json` with `type: "https://socius.app/problems/<code>"`. Request validation errors also become problem responses (code `invalid-request`, 422), and the OpenAPI schema's default 422 entry is replaced to match.
     *   **Schema:** one `Problem` response model, whose `code` field is the enum below. Every route declares its possible error statuses with `responses=` under `application/problem+json`, so the codes appear in the generated TypeScript and Schemathesis sees every status as documented.
     *   **Codes:**
-        *   `period-closed`
-        *   `not-admin`
+        *   `period-closed` (409)
+        *   `not-admin` (403)
         *   `not-member` (404)
-        *   `target-not-member`
-        *   `not-found`
-        *   `invalid-settings`
-        *   `group-full`
-        *   `request-conflict`
-        *   `invalid-request`
-        *   `unauthenticated`
+        *   `target-not-member` (422)
+        *   `not-found` (404)
+        *   `group-full` (409)
+        *   `request-conflict` (409)
+        *   `invalid-request` (422)
+        *   `unauthenticated` (401)
 
 #### 29. `services/api/src/socius_api/api/schemas.py` (Create)
 
@@ -984,10 +994,10 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `CheckInCreate`: `client_request_id`.
         *   `CheckInOut`: `id`, `recorded_at`, `counted_in`, a list of `{group_id, period_seq, ends_at}`.
     *   **Periods:**
-        *   `MemberScoreOut`: `user_id`, `display_name`, `state`, `points`, `counted_check_ins`, `is_loser`.
+        *   `MemberScoreOut`: `user_id`, `display_name`, `state`, `points`, `counted_check_ins`, `check_in_times` (UTC; the app shows them in local time), `is_loser`.
         *   `PeriodOut`:
             *   `group_id`, `seq`, `starts_at`, `ends_at`, `tz_name`
-            *   `status`: `open`, `closing` or `closed`
+            *   `status`: `not_started`, `open`, `closing` or `closed`
             *   `target_n`, `punishment_text`, `members`
             *   `has_loser`, `loser_user_id`, `was_tiebreak`
             *   `excusals`, a list of `{user_id, excused_by, recorded_at}`
@@ -1001,9 +1011,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Endpoints.
 *   **Proposed Changes:**
     *   **`POST /v1/check-ins`:**
-        *   Calls `ensure_current_period` for each of the caller's groups, sets `recorded_at` immediately before commit, and returns where it counted.
+        *   Calls `ensure_current_period` for each of the caller's groups (each in its own transaction, in `group_id` order), then inserts the check-in with `recorded_at` set immediately before commit, and returns where it counted.
         *   **Retries:** a `client_request_id` matching one of the caller's own rows returns that row with 200, including a removed row. A match on another user's row gets 409 `request-conflict`.
-    *   **`DELETE /v1/check-ins/{id}`:** own active check-in only; every period containing its `recorded_at` must still be open; sets `removed_at`.
+    *   **`DELETE /v1/check-ins/{id}`:** own active check-in only; every period it counts in must still be open; sets `removed_at`.
 
 #### 31. `services/api/src/socius_api/close.py` (Create)
 
@@ -1014,7 +1024,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 #### 32. `services/api/src/socius_api/api/routers/groups.py` (Create)
 
-*   **Type / Scope:** Game endpoints. Creating groups, the first start date, invites, removing, re-adding and promoting members are in spec 0001.
+*   **Type / Scope:** Game endpoints. Creating groups, Start, invites, removing, re-adding and promoting members are in spec 0001.
 *   **Proposed Changes:**
     *   **`GET /v1/groups/{group_id}/periods/current` and `GET /v1/groups/{group_id}/periods/{seq}`:**
         *   **Open:** live scores through `score_period`. Candidates aren't shown while the period is open.
@@ -1022,9 +1032,10 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   **Due but not closed:** calls `close_period` first, then reads the result. This is close on read.
         *   **Closed:** reads the saved result.
         *   **Access:** active members, plus removed members whose membership is in that period's member set.
-        *   `current` calls `ensure_current_period`; before the first start date it returns 404 `not-found` with the start date in the problem detail.
+        *   `current` calls `ensure_current_period`; before the group has started it returns 200 with `status: not_started` (and `starts_at` once Start has been tapped).
+    *   **`GET /v1/groups/{group_id}/periods`:** past periods, newest first, paged by `seq`, so the app can show history and open an ended period's result.
     *   **`PUT` / `DELETE /v1/groups/{group_id}/periods/{seq}/excusals/{user_id}`:** admin only. Applies the Excuse member and Revoke excusal rules from the request table. An admin may excuse themselves.
-    *   **`GET` / `PUT /v1/groups/{group_id}/settings`:** `PUT` is admin only, updates `group_settings`, and returns `applies_from`.
+    *   **`GET` / `PUT /v1/groups/{group_id}/settings`:** `PUT` is admin only. It calls `ensure_current_period` first, then updates `group_settings`, and returns `applies_from`.
 
 #### 33. `services/api/src/socius_api/api/routers/me.py` (Create)
 
@@ -1066,10 +1077,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         2.  **Extend:** call `ensure_current_period` for every started group.
         3.  **Close due periods:** for each due period, call `close_period`.
             *   On an exception, record the group, increment `groups_failed`, report to Sentry and continue.
-            *   Report an unclosed period older than the lookback as an error.
         4.  **Check closed periods:** for each period closed in the last 24 hours, call `rescore_matches`. Count mismatches, and report each one to Sentry.
         5.  **Count overdue:** set `overdue` with `count_overdue`.
-        6.  **Send notifications:** up to 100 unsent outbox rows, through `push_sender`, outside any open transaction, with a 10-second HTTP timeout. Each sent row stores its Expo ticket ID. The payload is "Results are in for <group>"; it never names the loser. Retries 429 and 5xx responses on a later run.
+        6.  **Send notifications:** claim up to 100 outbox rows (`claim_outbox`), then send them through `push_sender`, outside any open transaction, with a 10-second HTTP timeout. The push data carries `group_id` and `seq`. Each sent row stores its Expo ticket ID. The payload is "Results are in for <group>"; it never names the loser. Retries 429 and 5xx responses on a later run.
         7.  **Check receipts:** for rows sent at least 15 minutes ago with no receipt yet, fetch Expo receipts (up to 1,000 IDs per request), and delete push tokens reported as `DeviceNotRegistered`.
         8.  **Finish:** update the `job_runs` row.
             *   Call `heartbeat.success()` if `groups_failed = 0` and `overdue = 0`, otherwise `heartbeat.fail()`.
@@ -1104,7 +1114,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   An app built with the fake clock and the scheduler off.
         *   An `auth_as(user)` helper that overrides the auth dependency, for API tests.
         *   A test JWKS and a helper that signs real test JWTs, for the Schemathesis run and the auth tests, so authentication itself is exercised.
-    *   **Data:** factories for users, groups (with settings and a first start date), memberships and facts.
+    *   **Data:** factories for users, groups (with settings, started or not), memberships and facts.
     *   **Fakes:** `PushSender` and `Heartbeat`.
 
 #### 41. `services/api/tests/api/test_check_ins.py`, `test_periods.py`, `test_excusals.py`, `test_settings.py`, `test_authz.py` (Create)
@@ -1122,7 +1132,11 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **Invariant 12 and removals:** a member removed mid-period keeps their state and points, can still lose, can still read that period, and gets its results notification.
     *   **Invariant 13:** undo of a check-in whose period has ended in any group is rejected with `period-closed`.
     *   **Missing rows:** undo and revoke with nothing active return `not-found`.
-    *   **First period:** before the first start date, `current` returns `not-found`; members who join before it are eligible in the first period.
+    *   **Settings timing:** a settings `PUT` at end + 1 minute, before anything else has touched the group, applies to the period after the one already running.
+    *   **Removal and check-ins:** a check-in after a member's removal doesn't count in that group's period and isn't listed in `counted_in`.
+    *   **Account deletion:** a member who deletes their account mid-period is excused for it, and closed periods keep their points.
+    *   **First period:** before Start, `current` returns `status: not_started`; members who join before the first period begins are eligible in it.
+    *   **History:** `GET /periods` lists closed periods newest first.
     *   **Closing window:** a GET at end + 1 minute returns `status: closing` with no candidates.
     *   **Close on read:** CUJ 5. A GET for a due period closes it and opens the next; a second GET returns the same result.
     *   **Privacy:**
@@ -1142,6 +1156,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **Errors:** an error in one group doesn't block the others, and the heartbeat gets `fail()`.
     *   **Overdue:** a due period left unclosed past end + 60 min sets `overdue`, and the heartbeat gets `fail()`.
     *   **Outbox:** one row per member in the member set, sent once, and marked sent.
+    *   **Zone change:** after the admin changes the time zone, the next period starts at the previous end and ends at a day start in the new zone.
 
 #### 43. `services/api/tests/test_close_concurrency.py` (Create)
 
@@ -1149,7 +1164,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Proposed Changes:**
     *   **Two schedulers at once:** two threads, each with its own connection, run `run_close_periods` at the same moment. The result is one saved result, one set of outbox rows, one next period and one loser.
     *   **Scheduler and read at once:** one thread runs `run_close_periods` while another sends the close-on-read GET. The GET waits for the lock and returns the saved result.
-    *   **Concurrent `ensure_current_period`:** two callers at a period boundary create exactly one next period.
+    *   **Concurrent `ensure_current_period`:** two callers at a period boundary create exactly one next period; two check-ins by members of the same two groups, arriving in opposite group order, both succeed (no deadlock).
+    *   **Outbox:** two concurrent runs send each notification once.
     *   **Crash recovery:** a close that raises mid-transaction doesn't block the next run, because the transaction lock is released.
     *   **Repetition:** each scenario runs 20 times, to catch races that only happen sometimes.
 
@@ -1183,7 +1199,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 **Status: done (2026-11-11), then revised the same day for ADR-0011.** The PRD, HLD, CLAUDE.md and README summarize the game and link to this design instead of restating the rules; the ADR and spec templates were extended; ADRs 0001–0011 were written. Notes on how the PRD changed:
 
-*   FR-17 and FR-18 (rest-day vote notifications) are kept as "*(Removed: …)*" placeholders, and a new requirement was added as FR-15a, so existing requirement numbers stay stable.
+*   FR-17 and FR-18 (rest-day vote notifications) are kept as "*(Removed: …)*" placeholders, and a new requirement was added as FR-15a and FR-15b, so existing requirement numbers stay stable.
 *   The HLD keeps a system-level architecture diagram (it covers photo storage, which this design doesn't) and links to this design's Components diagram.
 *   `push_tokens` is defined in this design, because the close sends notifications.
 
@@ -1206,10 +1222,10 @@ These screens are useful only once spec 0001 (groups and invites) is built.
 *   **Type / Scope:** TanStack Query layer (D3).
 *   **Proposed Changes:**
     *   **Query keys:** a single key factory, for example `keys.period(groupId, seq)`, `keys.currentPeriod(groupId)` and `keys.settings(groupId)`.
-    *   **Read hooks:** `useCurrentPeriod(groupId)`, `usePeriod(groupId, seq)`, `useSettings(groupId)`.
+    *   **Read hooks:** `useCurrentPeriod(groupId)`, `usePeriod(groupId, seq)`, `usePeriodHistory(groupId)`, `useSettings(groupId)`.
     *   **Write hooks:**
         *   `useCheckIn` and `useUndoCheckIn` refresh the current period for every group in `counted_in`.
-        *   `useExcuse` and `useUpdateSettings`.
+        *   `useExcuse`, `useRevokeExcusal` and `useUpdateSettings`.
     *   **Check-in retries:** each check-in gets a `client_request_id` when it's tapped. An offline check-in is queued and retried with the same ID; if a group's deadline passes before it syncs, the app says it will count in the next period.
 
 #### 50. `apps/mobile/src/api/messages.ts` (Create)
@@ -1225,7 +1241,7 @@ These screens are useful only once spec 0001 (groups and invites) is built.
 *   **Proposed Changes:**
     *   **Today:** the check-in button, and each group's points and deadline (in the member's local time, with a countdown).
     *   **Group:** the live leaderboard for the current period: points out of N, badges for excused and joined mid-period, and excuse buttons for admins.
-    *   **Period result:** the final scores and the loser, a "decided by tie-break" label, excusals with who made them, and the punishment.
+    *   **Period result and history:** a list of past periods; each result shows the final scores and the loser, a "decided by tie-break" label, excusals with who made them, and the punishment.
     *   **Settings:** admin-only N, period length, time zone and punishment, with "applies from <date>" using `applies_from`.
     *   **Not included:** the suspense animation.
 
