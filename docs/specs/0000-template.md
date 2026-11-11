@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Draft / Agreed / Implemented / Superseded |
 | **Author** | |
-| **Design refs** | e.g. PRD §6.3, FR-10–FR-15; HLD §4 |
+| **Design refs** | e.g. PRD FR-6–FR-8; [engine design](../designs/weekly-game-engine.md#decided-rules) Decided Rules; HLD §4 |
 | **Phase** | v0.x |
 
 ## Problem
@@ -25,6 +25,12 @@ Tables/columns, constraints, migrations.
 
 ## Test plan
 Domain tests, API tests, mobile tests. List the edge cases each covers.
+
+## Alternatives considered
+Other approaches, each with what it would cost and why it was not chosen.
+
+## Risks
+What could go wrong, how likely, how we'd notice, and the mitigation.
 
 ## Out of scope
 What this spec deliberately does not do.
