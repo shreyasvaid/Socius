@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Draft / Agreed / Implemented / Superseded |
 | **Author** | |
-| **Design refs** | e.g. PRD FR-6–FR-8; [engine design](../designs/weekly-game-engine.md#decided-rules) Decided Rules; HLD §4 |
+| **Design refs** | e.g. PRD FR-6–FR-8; [engine design](../designs/game-engine.md#decided-rules) Decided Rules; HLD §4 |
 | **Phase** | v0.x |
 
 ## Problem

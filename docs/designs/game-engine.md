@@ -1,29 +1,27 @@
-# Socius Weekly Game Engine and Engineering Foundation
+# Socius Game Engine and Engineering Foundation
 
 *   **Author:** Shreyas Vaid
-*   **Status:** Accepted
-*   **Review:** reviewed by fresh-context reviewers for scope, comprehension and design (findings resolved 2026-11-11), then for cross-document consistency and technical viability against current official documentation (findings resolved 2026-11-11). A dedicated implementation-readiness review of the plan has not been run.
+*   **Status:** Accepted (revised 2026-11-11 by [ADR-0011](../adr/0011-group-periods.md))
 *   **Date:** 2026-11-11
+*   **Review:** the first version (fixed weeks, a global Monday cutoff) was reviewed by fresh-context reviewers for scope, comprehension, design, cross-document consistency and technical viability. This revision replaces its time model with group periods and drops skip tokens; the close, testing and tooling designs carry over. A dedicated implementation-readiness review of the plan has not been run.
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-Socius is an iOS and Android app for small groups who already know each other: couples, roommates, friends, families. The group agrees on a weekly training target. Each member checks in on the days they work out. When the week ends, the member with the fewest points (check-ins plus a weekly skip token) does the punishment the group agreed on. No money is involved, and check-ins are on the honor system.
+Socius is an iOS and Android app for small groups who already know each other: couples, roommates, friends, families. The group's admin sets a period (a whole number of days, such as a week or a month) and a target N. Each member checks in whenever they work out. When the period ends, the member with the fewest check-ins does the punishment the group agreed on. No money is involved, and everything is on the honor system.
 
 This document designs two things:
 
-1.  **The weekly game engine:**
-    *   how check-ins are recorded and dated
-    *   how each group's week is scored
+1.  **The game engine:**
+    *   how check-ins are recorded
+    *   how each group's periods are defined and scored
     *   how the loser is chosen
-    *   how weeks are closed on time without manual work
-    *   how skip tokens and admin excusals fit into scoring
+    *   how periods are closed on time without manual work
+    *   how admin excusals fit into scoring
+2.  **The engineering foundation that protects it:** build tooling, the API contract between app and server, and a testing approach aimed at the code most likely to produce a wrong result: scoring, period boundaries and the close.
 
-    A **skip token** is one free point per member, per group, per week. It isn't tied to a day.
-2.  **The engineering foundation that protects it:** build tooling, the API contract between app and server, and a testing approach aimed at the code most likely to produce a wrong result: scoring, dates and the weekly close.
-
-This design is the single source of the game rules. It replaced the earlier adherence-based model in [the product requirements](../product-requirements.md) and the group-time-zone model in [the high-level design](../high-level-design.md). Both documents now summarize the game and link here instead of restating the rules (Part B, Stage 8 of the plan, done 2026-11-11).
+This design is the single source of the game rules. The [product requirements](../product-requirements.md) and the [high-level design](../high-level-design.md) summarize the game and link here instead of restating the rules.
 
 --------------------------------------------------------------------------------
 
@@ -35,142 +33,139 @@ This design is the single source of the game rules. It replaced the earlier adhe
 *   The rules get argued over at the end of the week.
 *   The bet is forgotten by Wednesday.
 
-Socius only helps if the weekly result is something the group trusts without checking it. The rules must be simple enough to explain in one sentence. The result must be correct every week, including for members in different time zones and members who travel. It must arrive without anyone having to do anything.
+Socius only helps if the result is something the group trusts without checking it. The rules must be simple enough to explain in one sentence: *check in N times before the deadline, or risk being the one who does the punishment*. The result must arrive without anyone having to do anything.
 
-**For the system:** the hard part is not the arithmetic. Scoring is "count the days you trained, up to N". The hard part is everything around it:
+**For the system:** the arithmetic is trivial. The hard parts are around it:
 
-*   **Time.** At any instant, two or three calendar dates are in use somewhere on Earth, because time zones run from UTC−12 to UTC+14. Members' weeks start and end at different moments. For about 26 hours each weekend, a member in UTC+14 is already checking in for next week while a member in UTC−12 is still finishing this week.
-*   **One check-in, many groups.** A member in several groups checks in once, and that check-in must count in each group.
-*   **Closing on time.** Every group's week must close at a fixed time. If closing runs twice, or crashes halfway, it must produce the same result. A late check-in must never change a result that has already been announced.
+*   **One deadline per group.** Members can live in different time zones, but a group has one deadline, in the group's time zone. Period lengths vary by group and can change between periods.
+*   **One check-in, many groups.** A member in several groups checks in once, and that check-in must count in each group's open period.
+*   **Closing on time.** Every group's period must close at its deadline. If closing runs twice, or crashes halfway, it must produce the same result. A check-in arriving at the last second must never change a result that has already been announced.
 *   **Random tie-breaks.** When several members tie for last, the server picks one at random. A retry must never pick a different person.
 
 A mistake in any of these produces a wrong loser. In a small group of friends, one wrong loser is enough for people to stop trusting the app.
 
 ### Proposed solution (summary)
 
-*   **Check-ins.** A check-in is a single record per member per local date. It is stored once and never copied per group.
-*   **Scoring.** Each group's weekly score is computed from those records by a pure function (`score_week`), with no database or clock access. The function is given the week's saved settings and facts: N, when each member joined, who is excused, their check-in dates and who used a skip token. It works out who is eligible.
-*   **Closing.** Every week closes at Monday 12:00 UTC, the moment Sunday has ended everywhere on Earth. Two triggers run the same close: a scheduled job, and the first read of a week's results after the cutoff. Closing can safely be rerun, and it saves the result, including the tie-break pick, in one transaction.
-*   **Foundation.** pnpm + uv + a root `justfile` for tooling. An OpenAPI-generated TypeScript client for the app. Tests built on written invariants checked by property-based tests, plus tests of the close against a real Postgres database with a fake clock.
+*   **Check-ins.** A check-in is a single record of the moment the server received it. It is stored once, never copied per group, and counts in every group whose period is open at that moment.
+*   **Periods.** Each group has a stored time zone. Each period is a stored row with a start, an end (midnight in the group's zone), N and the punishment, so lengths and settings can change between periods without touching history.
+*   **Scoring.** A pure function (`score_period`) computes each period's scores from the check-ins, the members and the excusals, with no database or clock access.
+*   **Closing.** Two triggers run the same close: a scheduled job, and the first read of a period's results after its end. Closing can safely be rerun, and it saves the result, including the tie-break pick, in one transaction, then opens the next period.
+*   **Foundation.** pnpm + uv + a root `justfile` for tooling. An OpenAPI-generated TypeScript client for the app. Tests built on written invariants, checked by property-based tests where the rule is a pure function and by API and concurrency tests against a real Postgres database where it isn't.
 
 --------------------------------------------------------------------------------
 
 ## Goals
 
 *   **G1. Correct results with no manual work.**
-    *   For each group, every week ends in exactly one stored result, whether or not there is a loser.
-    *   The scheduled job writes the result by 12:15 UTC on Monday. If the job didn't run, the first read of that week after the cutoff writes it.
+    *   Every group's period ends in exactly one stored result, whether or not there is a loser.
+    *   The scheduled job writes the result within 15 minutes of the period's end. If the job didn't run, the first read of that period after its end writes it.
     *   Over a four-week trial with the test group (the first group of 4–5 people to use the app), no result is changed or computed by hand. A non-zero late-write mismatch count (see "Close protection") during the trial counts as a failure of this goal.
     *   The trial also needs groups and invites, which spec 0001 (groups and invites) covers, not this design.
 *   **G2. Rerunning gives the same answer.** Running the close any number of times, including two copies at once, produces the same stored result and the same loser. Tests check this against a real Postgres database.
-*   **G3. The rules are written down and tested.** Every scoring rule is stated as an invariant in this document, and each invariant has a named test. Rules that are pure functions get property-based tests (for example "points are always between 0 and N"); rules that depend on the database get API or concurrency tests. The Testing approach section says which is which.
-*   **G4. One check-in counts everywhere.** A member in several groups checks in once per day. That check-in adds a point in every group they belong to, with no duplicate records.
+*   **G3. The rules are written down and tested.** Every scoring rule is stated as an invariant in this document, and each invariant has a named test. Rules that are pure functions get property-based tests; rules that depend on the database get API or concurrency tests. The Testing approach section says which is which.
+*   **G4. One check-in counts everywhere.** A member in several groups checks in once. That check-in adds a point in every group whose period is open, with no duplicate records.
 *   **G5. One command for each task.** `just dev`, `just test`, `just lint` and `just gen-client` work from a fresh clone after following the README. CI runs the same commands.
 *   **G6. CI detects drift between the app and the API.** The TypeScript client is generated from the API's OpenAPI schema. CI fails if the committed client is out of date, or if sampled API responses don't match the schema.
-*   **G7. A missed close is noticed.** If any group's week has no result by Monday 13:00 UTC, an alert fires. Every close run leaves a record of what it did.
+*   **G7. A missed close is noticed.** If any period has no result 60 minutes after its end, an alert fires. Every close run leaves a record of what it did.
 
 --------------------------------------------------------------------------------
 
 ## Non-Goals
 
-*   **Fixed-days mode.** Groups can't require specific weekdays in v0.1; only a weekly count N exists. See Future Improvements.
-*   **Detecting cheating.** The server does not check that a check-in happened on the day it's dated. It doesn't detect a changed phone clock or time zone, or a false check-in. Any day of the open week can be logged, and all of this falls under the honor system. The one exception: a check-in dated later than "today" anywhere on Earth is rejected, because no honest phone can send such a date.
-*   **Rest-day votes.** Cut from v0.1.
-*   **Members leaving on their own, or opting out.** Only an admin can remove a member or excuse one.
+*   **Per-day rules.** There is no "one check-in per day" limit and no idea of which day a check-in belongs to. Two check-ins on one day are two points.
+*   **Detecting cheating.** The server does not verify that a workout happened. Everything is on the honor system.
+*   **Members' own time zones.** Members can live anywhere, but only the group's deadline matters. The app shows the deadline in each member's local time so nobody has to convert.
+*   **Skip tokens, rest-day votes and member opt-outs.** Only check-ins count. An admin excusal covers absences.
+*   **Members leaving on their own.** Only an admin can remove a member.
 *   **The suspense animation, and draws members can verify.** Deferred. The server saves the tie-break candidates and the pick, so retries and history are consistent, but members can't check the draw themselves.
-*   **Closing a group early** once its result can't change. See Future Improvements.
-*   **Configurable week length.** The week is always Monday to Sunday.
+*   **Closing a period early** once its result can't change. See Future Improvements.
+*   **Calendar-month periods.** Periods are a whole number of days; a "month" is 28, 30 or 31 days as the admin chooses.
 *   **Money and enforcement.** The app never handles money. It does not check whether punishments were done.
 *   **Bazel, Nx or Turborepo.** Not adopted at the current repo size. The tooling ADR records when to revisit this.
-*   **Product areas outside the game engine.** Profiles, proof photos, notifications beyond the weekly result, calorie targets, food logging and workout plans stay in the PRD. Each gets its own spec.
+*   **Product areas outside the game engine.** Profiles, proof photos, notifications beyond the results, calorie targets, food logging and workout plans stay in the PRD. Each gets its own spec.
 
 --------------------------------------------------------------------------------
 
 ## Decided Rules
 
-These are the game rules in force. Every other section refers here instead of restating them.
+These are the game rules in force. Every other section refers here instead of restating them. Items marked **[default]** were chosen by the assistant and are listed in CLAUDE.md as unconfirmed until the author confirms them.
 
 | Topic | Rule |
 |---|---|
-| **Target** | The admin sets one weekly target N, from 1 to 7. It is the same for every member. |
-| **Points** | `points = min(N, distinct counted check-in dates in the week + 1 if the skip token was used)`. |
-| **Check-in dates** | <ul><li>A check-in is accepted if its `local_date` is in a week that hasn't reached its cutoff, and `local_date ≤ latest_local_date(now)`, the date in UTC+14.</li><li>One check-in per member per date.</li><li>Logging an earlier day of the open week is allowed (honor system).</li></ul> |
-| **Undo** | <ul><li>A member can undo any of their own check-ins while its week is open.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
-| **Skip token** | <ul><li>One per member, per group, per week.</li><li>Adds 1 point, up to N.</li><li>Not tied to a day.</li><li>Can be withdrawn while the week is open.</li><li>The app warns before a token that would be wasted because the member is already at N.</li></ul> |
-| **Excusal** | <ul><li>Only an admin can excuse a member for a week, including themselves.</li><li>The request must be made while the admin's phone date is on or before Sunday of that week, and before the cutoff. The phone date is honor system.</li><li>An excused member can't lose that week.</li><li>The reason is never stored.</li><li>The group sees who was excused and by whom.</li><li>An excusal can be revoked under the same deadline.</li></ul> |
-| **Roles** | <ul><li>Two roles, `admin` and `member`. The PRD's earlier term "Owner" is replaced by `admin`.</li><li>A group can have more than one admin; the creator is the first. Promoting a member to admin and stepping down are defined in spec 0001. **[default]**</li></ul> |
-| **Membership** | <ul><li>Members can't leave a group on their own; only an admin can remove a member.</li><li>A member removed during week W keeps their state for W and can still lose W. They can still read the result of any week whose member set includes them, and they get that week's results notification. **[default]**</li><li>Re-adding a member in the same week restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as a removal from every group.</li></ul> |
+| **Group time zone** | <ul><li>Each group stores one IANA time zone, set from the creator's phone when the group is created.</li><li>All of the group's deadlines are midnight in this zone. Members' own zones don't matter.</li><li>Changing it is an admin setting that takes effect from the next period, so an admin who travels doesn't move the current deadline.</li></ul> |
+| **Period** | <ul><li>A whole number of days, from 1 to 365 **[default range]**, set by the admin.</li><li>A period starts at midnight in the group's zone and ends at midnight after its last day. The next period starts the moment the previous one ends.</li><li>The admin picks the first period's start date, which defaults to the next midnight in the group's zone. Until then the group is set up but not playing. **[default]**</li></ul> |
+| **Target** | The admin sets one target N, from 1 to 100 **[default range]**. It is the same for every member. |
+| **Check-ins** | <ul><li>A check-in counts in every group whose current period is open at the moment the server receives it (`recorded_at`).</li><li>No per-day limit: each check-in is one point.</li><li>A check-in that reaches the server after a period ended counts in the next period, not the ended one, even if the workout happened earlier (for example offline). Honor system throughout.</li></ul> |
+| **Points** | `points = min(N, counted check-ins in the period)`. For a member who joined mid-period, only check-ins after they joined count. |
+| **Undo** | <ul><li>A member can undo any of their own check-ins as long as every period it counts in is still open.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
+| **Excusal** | <ul><li>Only an admin can excuse a member for a period, including themselves, for any reason, any time before the period ends.</li><li>An excused member can't lose that period.</li><li>The reason is never stored. The group sees who was excused and by whom.</li><li>An excusal can be revoked before the period ends.</li></ul> |
+| **Roles** | <ul><li>Two roles, `admin` and `member`. The creator is the first admin.</li><li>A group can have more than one admin. Promoting a member and stepping down are defined in spec 0001. **[default]**</li></ul> |
+| **Membership** | <ul><li>Members can't leave on their own; only an admin can remove a member.</li><li>A member removed during a period keeps their state for it and can still lose it. They can still read that period's result and get its results notification. **[default]**</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group.</li></ul> |
 | **Group size** | At most 8 active members per group. Enforced when a member joins (spec 0001). |
-| **Joining** | <ul><li>The phone sends its local date when a member joins (`joined_local_date`, honor system).</li><li>A member who joins during week W can't lose W.</li><li>In that group, only their check-ins dated on or after `joined_local_date` count.</li></ul> |
-| **Settings changes** | <ul><li>A change to N or the punishment text takes effect from `week_start(latest_local_date(now)) + 7 days`. That is the first week that hasn't started anywhere on Earth.</li><li>A second change before then replaces the pending one.</li><li>A new group's first settings row takes effect from `week_start(creator's joined_local_date)`, the week the creator joined in. This is the one case where a settings row covers a week that may already have begun somewhere, so the creator's first week always has settings. **[default]**</li></ul> |
+| **Joining** | A member who joins after a period has started can't lose that period. Their check-ins after joining still show as points. |
+| **Settings changes** | Changes to N, period length, time zone or punishment text take effect from the next period. The current period never changes. |
 | **Loser** | See "Eligibility and the loser rule". |
 
 **Still open:**
 
-*   **Deleted accounts in past results.** A member who deletes their account mid-week is still scored. How do they appear in that week's result and in history? An "Anonymous member" label is likely. The account-deletion spec decides.
+*   **Deleted accounts in past results.** How a member who deleted their account appears in history. An "Anonymous member" label is likely. The account-deletion spec decides.
 *   **The only admin deletes their account.** Who becomes admin? Spec 0001 decides.
-*   **Late results in eastern time zones.** Results arrive around Monday 04:00 in California, Monday 21:00 in Tokyo and Monday 23:00 in Sydney. Accepted for v0.1. Revisit if the test group complains.
 
 --------------------------------------------------------------------------------
 
 ## Critical User Journeys (CUJs)
 
-### CUJ 1: One workout counts in two groups
+### CUJ 1: One workout counts in two groups with different deadlines
 
 *   **Given**:
-    *   Alex is in group A (N = 4) and group B (N = 3).
-    *   Alex's phone is set to America/New_York.
-    *   It's Wednesday.
-    *   Alex has already checked in Monday and Tuesday.
-*   **When**: Alex checks in at 19:30 local time on Wednesday.
+    *   Alex is in group A (zone America/Chicago, 7-day periods, N = 4) and group B (zone Europe/London, 14-day periods, N = 6).
+    *   Group A's current period ends Monday 00:00 Chicago time. Group B's ends a week later.
+    *   Alex lives in Tokyo.
+*   **When**: Alex checks in at 13:00 Monday Tokyo time, which is 22:00 Sunday Chicago time.
 *   **Then**:
-    *   One check-in record dated Wednesday is stored.
-    *   Alex's score is 3 in group A and 3 in group B. Group B is now at its cap, so a check-in on Thursday raises A to 4 and leaves B at 3.
-    *   A second check-in attempt on Wednesday is rejected with "You've already checked in today."
+    *   One check-in is stored.
+    *   It counts in group A's current period (still open in Chicago) and in group B's current period.
+    *   An hour later, group A's period ends; the same check-in stays counted there, and the app shows group A's next deadline in Tokyo time.
 
-### CUJ 2: Week closes with a tie at the bottom
+### CUJ 2: A period closes with a tie at the bottom
 
 *   **Given**:
     *   Group C has four eligible members and N = 5.
-    *   On Sunday night their scores are 5, 3, 2 and 2.
-*   **When**: the scheduled close runs at Monday 12:05 UTC.
+    *   When the period ends, their points are 5, 3, 2 and 2.
+*   **When**: the scheduled close runs a few minutes after the end.
 *   **Then**:
     *   Each member's points are recorded. The two members on 2 are the tied candidates.
-    *   The server picks one of them at random. The candidates and the loser are saved in the same transaction as the scores.
+    *   The server picks one of them at random. The candidates and the loser are saved in the same transaction as the scores, and the next period is opened.
     *   Running the close again changes nothing.
     *   Each member gets a notification. It says results are ready but doesn't name the loser.
-    *   The results screen shows everyone's points, the loser, a "decided by tie-break" label and the punishment text saved for that week.
+    *   The results screen shows everyone's points, the loser, a "decided by tie-break" label and the punishment text saved for that period.
 
 ### CUJ 3: An excused member and a new joiner cannot lose
 
 *   **Given**:
     *   Group D has members P, Q and R, and N = 3.
-    *   On Saturday, the admin excused R for this week because R is sick.
-    *   S joined the group on Thursday.
-*   **When**: the week closes with P on 3, Q on 1, R on 0 and S on 2.
+    *   During the period, the admin excused R because R is sick.
+    *   S joined the group partway through the period.
+*   **When**: the period closes with P on 3, Q on 1, R on 0 and S on 2.
 *   **Then**:
     *   Only P and Q are eligible. Q loses with 1 point.
-    *   R and S are shown with their points and marked "excused" and "joined mid-week". Neither is a candidate. S's points count only check-ins from Thursday on.
-    *   If Q had also been excused, only P would be eligible. Fewer than two eligible members means no loser that week.
+    *   R and S are shown with their points and marked "excused" and "joined mid-period". Neither is a candidate.
+    *   If Q had also been excused, only P would be eligible. Fewer than two eligible members means no loser.
 
-### CUJ 4: A skip token covers a missed day
+### CUJ 4: Two check-ins in one day
 
-*   **Given**:
-    *   Group E has N = 4.
-    *   Jordan has checked in twice by Saturday and hasn't used this week's skip token.
-*   **When**: Jordan uses the skip token and checks in on Sunday.
-*   **Then**:
-    *   Jordan's points are 2 + 1 (token) + 1 = 4, which reaches N.
-    *   Jordan can't lose. If every eligible member reached 4, the week has no loser.
+*   **Given**: group E has N = 4, and Jordan has 2 points.
+*   **When**: Jordan checks in after a morning run and again after an evening gym session.
+*   **Then**: Jordan has 4 points, which reaches N. A fifth check-in is stored but Jordan's points stay at 4.
 
 ### CUJ 5: Results appear even when the scheduler didn't run
 
-*   **Given**: the API process was asleep through Monday morning, so the scheduled close never ran for group F's week.
-*   **When**: a member of group F opens last week's results at Monday 14:00 UTC.
+*   **Given**: the API process was asleep when group F's period ended, so the scheduled close never ran.
+*   **When**: a member of group F opens the ended period's results two hours later.
 *   **Then**:
-    *   The API closes that group-week inline before responding. It uses the same close function as the scheduler.
+    *   The API closes that period inline before responding, using the same close function as the scheduler, and opens the next period.
     *   The member sees the final result.
-    *   No scheduled run sent a success ping after the scheduler went quiet, so the heartbeat monitor had already alerted by 13:00 UTC (G7). The overdue count doesn't see this week, because it was closed on read before any run could count it.
+    *   No scheduled run sent a success ping while the process was asleep, so the heartbeat monitor had already alerted (G7).
 
 --------------------------------------------------------------------------------
 
@@ -186,8 +181,8 @@ flowchart LR
   subgraph Server["API process"]
     API["FastAPI service<br/>REST /v1<br/>(also closes on read)"]
     SCHED["In-process scheduler<br/>every 5 min"]
-    CLOSE["close_weeks<br/>(+ sends outbox)"]
-    DOM["domain/<br/>pure scoring<br/>(no I/O, no clock)"]
+    CLOSE["close_periods<br/>(+ sends outbox)"]
+    DOM["domain/<br/>pure scoring + period math<br/>(no I/O, no clock)"]
   end
   AUTH["Supabase Auth"]
   PG[("PostgreSQL")]
@@ -211,68 +206,54 @@ flowchart LR
   API -- "errors" --> ERR
 ```
 
-*   **Mobile app.** Sends check-ins and admin actions, and shows live and final scores. It talks only to the API and to Supabase Auth, never to the database. It doesn't compute weeks: the API returns `week_start` and `cutoff`.
-*   **API.** Validates every request, checks permissions, and stores facts: check-ins, excusals, skip tokens, settings changes. It computes *live* scores on request by calling the same pure scoring function the close uses. A request for a week that should be closed but isn't triggers the close inline.
-*   **`domain/` module.** Pure Python functions with no database, network or clock access: `score_week`, eligibility, week arithmetic and the loser rule. Everything that decides who loses lives here, so it can be property-tested on its own.
-*   **`close_weeks`.** After each week's cutoff, it computes and saves the final result for every group, then sends any unsent notifications. It is safe to run any number of times. It is started by the in-process scheduler, and also called for a single group-week by the API's close on read.
+*   **Mobile app.** Sends check-ins and admin actions, and shows live and final scores and each group's deadline in the member's local time. It talks only to the API and to Supabase Auth, never to the database. It does no period math: the API returns each period's start and end.
+*   **API.** Validates every request, checks permissions, and stores facts: check-ins, excusals, settings changes. It computes *live* scores by calling the same pure scoring function the close uses. A request for a period that has ended but isn't closed triggers the close inline.
+*   **`domain/` module.** Pure Python functions with no database, network or clock access: `score_period`, eligibility, period boundaries and the loser rule. Everything that decides who loses lives here, so it can be property-tested on its own.
+*   **`close_periods`.** After each period's end, it computes and saves the result, opens the next period, then sends any unsent notifications. It is safe to run any number of times. It is started by the in-process scheduler, and also called for a single period by the API's close on read.
 *   **Monitoring.**
-    *   An uptime monitor requests `GET /healthz` every 5 minutes, which keeps the process awake on free hosting tiers.
-    *   A heartbeat monitor gets a success ping only when a run had no failures and no week is overdue. Otherwise it gets a failure signal.
+    *   An uptime monitor requests `GET /healthz` every 5 minutes, which keeps the process awake on free hosting.
+    *   A heartbeat monitor gets a success ping only when a run had no failures and no period is overdue. Otherwise it gets a failure signal.
     *   Errors go to an error tracker.
 
 ### Core idea: store facts, compute scores
 
-The database stores only facts that users or admins created:
+The database stores facts that users or admins created (check-ins, excusals, settings changes, memberships) and one row per period with its boundaries and settings. Scores are never stored while a period is open. They are computed from the facts each time they're needed: for the live leaderboard, and once more at close. The close result is then frozen on the period row.
 
-*   a member checked in on a date
-*   a member used a skip token in a week
-*   an admin excused a member for a week
-*   an admin changed the settings, starting from a given week
-
-Scores are never stored while a week is open. They are computed from the facts each time they're needed: for the live leaderboard, and once more at close. The close result is then frozen.
-
-This removes three sources of bugs:
+This removes two sources of bugs:
 
 *   there are no per-group copies of a check-in to keep in sync
 *   there is no counter that can drift
-*   there is no weekly job that pre-creates "sessions"
 
-The cost is that every leaderboard view recomputes scores. With at most 8 members × 7 days, that is at most 56 check-in rows per request.
+The cost is that every leaderboard view recomputes scores. A group has at most 8 members, and points stop mattering at N (at most 100), so this is a few hundred rows per request at the very most.
 
 ### Time model
 
-*   **Local date.** Every check-in carries the date on the member's phone (`local_date`), plus the phone's IANA time zone and UTC offset at that moment. The server stores what the phone sent and doesn't try to detect changed clocks or zones. Which dates are accepted is in Decided Rules.
-*   **Week key.** A week is identified by the date of its Monday (`week_start`). A check-in belongs to the week `week_start = local_date − weekday(local_date)`. It doesn't use ISO week numbers, which mix years in late December.
-*   **Cutoff.** Week `W` closes at `W + 7 days, 12:00 UTC`: the following Monday at noon UTC. That's the moment Sunday ends in UTC−12, the last zone to finish a given date. Every group shares this cutoff. Nothing dated in week `W` can be created, undone or changed after it.
-*   **When a week begins.** Week `W` begins anywhere at `W 00:00` in UTC+14, which is Sunday 10:00 UTC. This instant decides which weeks a settings change may affect, and which weeks a removed member still belongs to.
-*   **The closing window.** Between `cutoff(W)` and `cutoff(W) + 5 minutes`, week `W` is `closing`: writes are rejected, the close hasn't run yet, and reads return live scores with `status: closing` and no candidates.
-*   **Two weeks open at once.** Weeks are keyed by their Monday, not by "the current period", so week `W` and week `W+1` can both accept check-ins during the weekend overlap. No special handling is needed.
+*   **Group time zone.** Each group's settings hold one IANA zone. Period boundaries are midnights in that zone, computed with `zoneinfo`, so daylight-saving changes are handled: a 7-day period that crosses a DST change is 167 or 169 hours long, and still ends at midnight.
+*   **Periods.**
+    *   The first period starts at midnight at the start of the admin's chosen first day.
+    *   Each period ends at midnight after its last day: `ends_at = midnight(local_date(starts_at) + period_days)` in the period's zone.
+    *   The next period starts exactly at the previous `ends_at`, so periods never overlap and never leave a gap. If the zone changes between periods, the new period's end is computed in the new zone from the same start instant.
+*   **Which period a check-in is in.** A check-in counts in a group's period if `starts_at ≤ recorded_at < ends_at`. `recorded_at` is the server's time, set immediately before the check-in commits, so it is never later than the commit by more than the transaction timeout.
+*   **Members' zones.** Not stored or used for scoring. The app shows each deadline converted to the member's local time.
+*   **The closing window.** Between a period's end and 5 minutes after it, the period is `closing`: writes for it are rejected, the close hasn't run yet, and reads return live scores with `status: closing` and no candidates.
 *   **Clock injection.** All code that needs the current time takes it from a `Clock` object passed in. Business logic never calls `datetime.now()` or uses Postgres `now()` or `DEFAULT now()`. The same fake clock is injected into both the API and the close in tests.
 *   **Clock skew.** Hosts use NTP. A few seconds of skew between processes is absorbed by the 5-minute close delay.
 
 ### Eligibility and the loser rule
 
-**Member set for week W.** A membership is in week `W` if:
-
-*   `joined_local_date ≤ Sunday(W)`, and
-*   it hasn't been removed, or it was removed at or after the moment `W` began anywhere.
-
-Re-adding a member in the same week reuses their earlier membership row, so `joined_local_date` doesn't change.
+**Member set for period P.** A membership is in P if it joined before P ended (`joined_at < ends_at`) and either hasn't been removed or was removed after P started (`removed_at ≥ starts_at`). Re-adding a member in the same period reuses their earlier membership row, so `joined_at` doesn't change.
 
 Each member in the set is in exactly one state:
 
 | State | Condition | Can lose? |
 |---|---|---|
-| `joined_mid_week` | `joined_local_date ≥ W` (joined during W) | no |
-| `excused` | an active excusal exists for W, and they didn't join mid-week | no |
+| `joined_mid_period` | `joined_at > starts_at` | no |
+| `excused` | an active excusal exists for P, and they didn't join mid-period | no |
 | `eligible` | everyone else | yes |
 
-Joining mid-week takes precedence over an excusal. Both mean "can't lose", so the order only affects the label shown.
+Joining mid-period takes precedence over an excusal. Both mean "can't lose", so the order only affects the label shown.
 
-**Points:**
-
-*   **What's counted.** Distinct `local_date` values in W from active check-ins, plus 1 for an active skip token, up to N.
-*   **Mid-week joiners.** Only dates on or after their `joined_local_date` count.
+**Points:** active check-ins with `starts_at ≤ recorded_at < ends_at` (and, for a mid-period joiner, `recorded_at ≥ joined_at`), up to N.
 
 **Loser rule** (pure function, applied to eligible members only):
 
@@ -289,97 +270,91 @@ Joining mid-week takes precedence over an excusal. Both mean "can't lose", so th
 ### Data model (game engine only)
 
 ```text
-groups              id, name, created_by, created_at
-                    PK (id)
-group_settings      group_id, effective_week_start (date), target_n (1..7),
-                    punishment_text, created_by, recorded_at
-                    PK (group_id, effective_week_start)
-memberships         id, group_id, user_id, role (admin|member),
-                    joined_at, joined_local_date, removed_at
-                    PK (id); UNIQUE (group_id, user_id) WHERE removed_at IS NULL
-check_ins           id, user_id, local_date, tz_name, utc_offset_minutes,
-                    captured_at (phone time), recorded_at (server time),
-                    removed_at, client_request_id (uuid)
-                    PK (id); UNIQUE (client_request_id);
-                    UNIQUE (user_id, local_date) WHERE removed_at IS NULL
-skip_token_uses     id, group_id, user_id, week_start, recorded_at, removed_at
-                    PK (id); UNIQUE (group_id, user_id, week_start)
-                    WHERE removed_at IS NULL
-excusals            id, group_id, user_id, week_start, excused_by,
-                    recorded_at, removed_at
-                    PK (id); UNIQUE (group_id, user_id, week_start)
-                    WHERE removed_at IS NULL
-week_results        group_id, week_start, target_n, punishment_text,
-                    closed_at, has_loser, loser_user_id,
-                    tiebreak_candidates (uuid[], empty if no tie),
-                    scoring_version
-                    PK (group_id, week_start)
-week_member_results group_id, week_start, user_id, state, check_in_days,
-                    skip_token_used, points, is_loser
-                    PK (group_id, week_start, user_id)
-push_tokens         id, user_id, token, platform, tz_name, recorded_at
-                    PK (id); UNIQUE (token)
-notification_outbox id, user_id, kind, payload (jsonb), created_at, sent_at,
-                    expo_ticket_id, receipt_checked_at
-job_runs            id, started_at, finished_at, weeks_closed,
-                    groups_failed, overdue, mismatches, error
+groups                id, name, first_period_start_date, created_by, created_at
+                      PK (id)
+group_settings        group_id, target_n (1..100), period_days (1..365), tz_name,
+                      punishment_text, updated_by, updated_at
+                      PK (group_id)          -- settings for the next period
+periods               id, group_id, seq, starts_at, ends_at, tz_name,
+                      period_days, target_n, punishment_text,
+                      closed_at, has_loser, loser_user_id,
+                      tiebreak_candidates (uuid[], empty if no tie),
+                      scoring_version
+                      PK (id); UNIQUE (group_id, seq); UNIQUE (group_id, starts_at)
+period_member_results period_id, user_id, state, counted_check_ins, points, is_loser
+                      PK (period_id, user_id)
+memberships           id, group_id, user_id, role (admin|member),
+                      joined_at, removed_at
+                      PK (id); UNIQUE (group_id, user_id) WHERE removed_at IS NULL
+check_ins             id, user_id, recorded_at, removed_at, client_request_id (uuid)
+                      PK (id); UNIQUE (client_request_id)
+excusals              id, period_id, user_id, excused_by, recorded_at, removed_at
+                      PK (id); UNIQUE (period_id, user_id) WHERE removed_at IS NULL
+push_tokens           id, user_id, token, platform, tz_name, recorded_at
+                      PK (id); UNIQUE (token)
+notification_outbox   id, user_id, kind, payload (jsonb), created_at, sent_at,
+                      expo_ticket_id, receipt_checked_at
+job_runs              id, started_at, finished_at, periods_closed,
+                      groups_failed, overdue, mismatches, error
 ```
 
-*   **Timestamps.** The fact tables (`check_ins`, `skip_token_uses`, `excusals`) use the same two columns: `recorded_at` (server time when the API wrote the row) and `removed_at` (set by undo, withdraw or revoke). `memberships` uses `joined_at` and `removed_at`; `group_settings` rows are replaced while pending and never removed.
-*   **Partial unique indexes.** Each `UNIQUE … WHERE` above is a unique *index*, not a table constraint (SQLAlchemy: `Index(..., unique=True, postgresql_where=...)`). An `INSERT … ON CONFLICT` against one must repeat its `WHERE` predicate (SQLAlchemy: `index_where=`).
-*   **`push_tokens.tz_name`.** The phone's current time zone, updated when the app opens, used only to send reminders at the right local time. Private, like a check-in's zone.
-*   **Settings.** A week's settings are the `group_settings` row with the latest `effective_week_start ≤ W`. The settings are copied into `week_results` at close, so later edits never change history.
-*   **Check-ins.** They have no `group_id`. One row counts in every group whose member set for that week includes the member, subject to the joining rule.
+*   **Settings.** `group_settings` always holds the settings for the *next* period. When a period row is created, it copies them, so a change never affects a period that already exists, and history never changes.
+*   **Periods.**
+    *   A period row is created ahead of use by `ensure_current_period(group, now)`, which inserts any missing periods up to the one containing `now` with `INSERT … ON CONFLICT (group_id, seq) DO NOTHING`, so concurrent callers can't create duplicates.
+    *   The check-in, period-read and close paths all call it.
+    *   A check-in doesn't need its period row to exist yet: it is matched to periods by time.
+*   **Results.** A period's result lives on its own row (`closed_at` and the result columns are null while open), plus `period_member_results`. Closing is an `UPDATE … WHERE closed_at IS NULL`, so a second close changes nothing.
+*   **Check-ins.** They have no group. One row counts in every group whose period contains its `recorded_at`, subject to the joining rule.
 *   **Retries.** `client_request_id` stays unique on every row, including removed ones. A retried request, even one arriving after an undo, can't create a second check-in.
-*   **No open-week table.** There is no table for open weeks. A week exists implicitly, from its key plus the facts. It becomes a row only when `week_results` is written at close.
+*   **Timestamps.** `check_ins` and `excusals` use `recorded_at` (server time when written) and `removed_at` (set by undo or revoke) instead of deleting rows. `memberships` uses `joined_at` and `removed_at`.
+*   **Partial unique indexes.** Each `UNIQUE … WHERE` above is a unique *index*, not a table constraint (SQLAlchemy: `Index(..., unique=True, postgresql_where=...)`). An `INSERT … ON CONFLICT` against one must repeat its `WHERE` predicate (SQLAlchemy: `index_where=`).
+*   **`push_tokens.tz_name`.** The phone's current zone, updated when the app opens, used only to send reminders at the right local time. Private.
 *   **`scoring_version`.** A label recording which rules produced a past result. Nothing recomputes old results from it.
 
 ### Request rules (API)
 
-Every write that touches week `W` first checks `clock.now() < cutoff(W)`, and rejects with `week-closed` otherwise. Each error is an RFC 9457 problem response with a stable `type` code the app maps to a message.
+Every write that touches period `P` checks `clock.now() < P.ends_at` when the request starts and again immediately before commit, and rejects with `period-closed` otherwise. Each error is an RFC 9457 problem response with a stable `code` the app maps to a message.
 
-**Every group endpoint** returns 404 `not-member` when the caller isn't an active member, so the response doesn't reveal that the group exists. One exception: a removed member can still `GET` any week whose member set includes them.
+**Every group endpoint** returns 404 `not-member` when the caller isn't an active member, so the response doesn't reveal that the group exists. One exception: a removed member can still `GET` any period whose member set includes them.
 
 | Action | Extra rules | Error codes |
 |---|---|---|
-| Check in | one active check-in per `local_date` per user; `local_date ≤ latest_local_date(now)`; a retried `client_request_id` must belong to the same user | `already-checked-in`, `date-not-accepted`, `request-conflict`, `week-closed` |
-| Undo check-in | own active check-in only; sets `removed_at` | `not-found`, `week-closed` |
-| Use skip token | one active token per member per group per week; the response says if it was wasted (already at N) | `token-already-used`, `week-closed` |
-| Withdraw skip token | own active token only | `not-found`, `week-closed` |
-| Excuse member | <ul><li>admin only</li><li>target must be in W's member set</li><li>admin's phone date ≤ Sunday(W)</li></ul> | `not-admin`, `target-not-member`, `excusal-window-closed`, `week-closed` |
-| Revoke excusal | admin only; an active excusal must exist; same deadline as excusing | `not-admin`, `not-found`, `excusal-window-closed`, `week-closed` |
-| Change target N or punishment text | admin only; N from 1 to 7; takes effect per Decided Rules | `not-admin`, `invalid-target` |
-| Join, remove, re-add member; promote to admin, step down | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
+| Check in | none; it counts in every group with an open period. A retried `client_request_id` must belong to the same user | `request-conflict` |
+| Undo check-in | own active check-in only; every period it counts in must still be open; sets `removed_at` | `not-found`, `period-closed` |
+| Excuse member | admin only; target must be in P's member set; before P ends | `not-admin`, `target-not-member`, `period-closed` |
+| Revoke excusal | admin only; an active excusal must exist; before P ends | `not-admin`, `not-found`, `period-closed` |
+| Change settings (N, period length, time zone, punishment text) | admin only; N 1–100, period 1–365 days, a valid IANA zone; applies from the next period | `not-admin`, `invalid-settings` |
+| Create group, set the first start date, join, remove, re-add, promote, step down | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
 
 ### The close
 
-**One function, two triggers.** `close_group_week(session, group_id, week_start, clock)` closes one group-week:
+**One function, two triggers.** `close_period(session, period_id, clock)` closes one period:
 
-1.  It runs only if `now ≥ cutoff(W) + 5 minutes`.
-2.  It takes the blocking `pg_advisory_xact_lock` on a key derived from `(group_id, week_start)`. If another close holds it, this one waits (bounded by the transaction timeout) rather than giving up, so a close on read never returns empty-handed. There is one lock key per group-week, so no deadlock is possible. A transaction lock is released automatically at commit or rollback, so a crash can't leave it held.
-3.  With the lock held, it checks again whether a result exists. If one does, it returns `already_closed`.
-4.  It loads the members, settings and facts for the week, and calls `score_week`. If several members are tied, it picks the loser with `secrets.choice`.
-5.  It inserts `week_results` with `INSERT … ON CONFLICT DO NOTHING RETURNING`, then `week_member_results` and one `notification_outbox` row per member in the member set (including members removed during the week), then commits. A conflict returns no row instead of aborting the transaction, so the caller's session stays usable. The primary key, not the lock, is what guarantees exactly one result.
+1.  It runs only if `now ≥ ends_at + 5 minutes`.
+2.  It takes the blocking `pg_advisory_xact_lock` on a key derived from the period ID. If another close holds it, this one waits (bounded by the transaction timeout) rather than giving up, so a close on read never returns empty-handed. There is one lock key per period, so no deadlock is possible, and the lock is released automatically at commit or rollback.
+3.  With the lock held, it checks again whether the period is closed. If it is, it returns `already_closed`.
+4.  It loads the member set, excusals and check-ins, and calls `score_period`. If several members are tied, it picks the loser with `secrets.choice`.
+5.  It updates the period row with the result (`… WHERE closed_at IS NULL`), inserts `period_member_results` and one `notification_outbox` row per member in the member set (including members removed during the period), calls `ensure_current_period` so the next period exists, and commits.
 
 The two triggers:
 
 *   **Scheduled (D2).**
-    *   APScheduler inside the FastAPI process runs `close_weeks` every 5 minutes.
-    *   `close_weeks` calls `close_group_week` for every due group-week from the last 8 weeks. A due week older than 8 weeks is reported as an error, not closed.
+    *   APScheduler inside the FastAPI process runs `close_periods` every 5 minutes.
+    *   `close_periods` first calls `ensure_current_period` for every group that has started, then calls `close_period` for every period that is due (ended at least 5 minutes ago, not closed) and ended in the last 30 days. An older unclosed period is reported as an error, not closed.
     *   Then it sends up to 100 unsent outbox rows through Expo Push (Expo's per-request limit) and marks them sent, storing each push ticket ID. It also fetches receipts for tickets sent at least 15 minutes earlier and deletes push tokens Expo reports as `DeviceNotRegistered`.
-*   **On read (D2 addition).** `GET` for a week that is due but has no result calls `close_group_week` for that one group-week before responding. Results are then correct whenever someone looks; only notification timing depends on the scheduler.
+*   **On read (D2 addition).** `GET` for a period that is due but not closed calls `close_period` before responding. Results are then correct whenever someone looks; only notification timing depends on the scheduler.
 
 **Each scheduled run also:**
 
 1.  Records a `job_runs` row.
 2.  Catches an error in any one group, records it in `job_runs.groups_failed` and the error tracker, and continues with the other groups.
-3.  **Checks for late writes** by rescoring recent weeks (see "Close protection" below).
-4.  Counts overdue group-weeks (`now ≥ cutoff + 60 minutes` and no result) into `job_runs.overdue`.
+3.  **Checks for late writes** by rescoring recently closed periods (see "Close protection" below).
+4.  Counts overdue periods (`now ≥ ends_at + 60 minutes` and not closed) into `job_runs.overdue`.
 5.  **Heartbeat.** Sends the success ping only if `groups_failed = 0` and `overdue = 0`. Otherwise it sends the monitor's failure signal. This is what makes G7 hold.
 
 **Delivery.** Notifications are delivered **at least once**. A crash after Expo accepts a push but before `sent_at` is written can resend it.
 
-**Single process.** The API runs with one uvicorn worker, so there is one scheduler. More workers would each start their own; results would stay correct, but every run would be duplicated. The scheduler's first run happens at startup, not 5 minutes later, so a process that just woke up closes due weeks immediately.
+**Single process.** The API runs with one uvicorn worker, so there is one scheduler. More workers would each start their own; results would stay correct, but every run would be duplicated. The scheduler's first run happens at startup, so a process that just woke up closes due periods immediately.
 
 **Keeping the API awake.** Free hosting puts idle processes to sleep, and a sleeping process runs no scheduled jobs. The uptime monitor keeps it awake, and close on read covers the gaps. Current free options (checked 2026-11-11; re-check before deploying):
 
@@ -391,13 +366,13 @@ The plan is Render's free tier with the uptime ping. The fallback is a small alw
 
 **Close protection (D1, decided: time check plus delay, with bounded transactions and rescore detection):**
 
-*   **Rejecting late writes.** Every write for week `W` is rejected once `clock.now() ≥ cutoff(W)`.
-*   **Checking twice.** The cutoff is checked when the request starts and again immediately before commit, so time spent waiting for a database connection or a thread can't carry a write past the cutoff.
-*   **Bounding the race.** The database role the API uses has `transaction_timeout = 30s` (PostgreSQL 17 or later), `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 30s`, set with `ALTER ROLE` so they apply through any connection pooler. A write transaction that passed the pre-commit check therefore commits or is cut off within 30 seconds, well inside the 5-minute close delay. (`statement_timeout` alone limits each statement, not the transaction, which is why `transaction_timeout` is needed.) Because `idle_in_transaction_session_timeout` ends the whole connection, the pool uses `pool_pre_ping` to discard dead connections.
-*   **What the close reads.** Facts with `recorded_at < cutoff(W)` that are active (`removed_at` is null) at the time of the close.
-*   **Detecting what slips through.** Each scheduled run rescores every group-week closed in the previous 24 hours from the current facts, using the same filter, and compares the result with the saved `week_member_results`.
-    *   A difference means a write or undo committed after the close.
-    *   It is recorded in `job_runs.mismatches` and reported to the error tracker. This also catches late undos, withdrawn tokens and revoked excusals.
+*   **Rejecting late writes.** Excusals, revocations and undos for period `P` are rejected once `clock.now() ≥ P.ends_at`, checked at the start of the request and again immediately before commit.
+*   **Check-ins.** A check-in's `recorded_at` is set immediately before commit, so it always lands in the period that is open at that moment.
+*   **Bounding the race.** The database role the API uses has `transaction_timeout = 30s` (PostgreSQL 17 or later), `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 30s`, set with `ALTER ROLE` so they apply through any connection pooler. A write whose pre-commit check passed therefore commits or is cut off within 30 seconds, well inside the 5-minute close delay. (`statement_timeout` alone limits each statement, not the transaction, which is why `transaction_timeout` is needed.) Because `idle_in_transaction_session_timeout` ends the whole connection, the pool uses `pool_pre_ping` to discard dead connections.
+*   **What the close reads.** Check-ins with `starts_at ≤ recorded_at < ends_at` and excusals for the period that are active (`removed_at` is null) when the close runs.
+*   **Detecting what slips through.** Each scheduled run rescores every period closed in the previous 24 hours from the current facts, using the same filter, and compares the result with the saved `period_member_results`.
+    *   A difference means a write committed after the close.
+    *   It is recorded in `job_runs.mismatches` and reported to the error tracker.
     *   The saved result is not changed automatically.
 
 ### Tooling and contract
@@ -414,63 +389,63 @@ The plan is Render's free tier with the uptime ping. The fallback is a small alw
 
 | Layer | What it proves | How |
 |---|---|---|
-| `domain/` scoring, eligibility, week math | The pure rules hold for all inputs | Hypothesis property tests for invariants 1–6, 8, 9, 11 and 12, plus example tests for CUJs 1 and 4 |
-| API | Request rules, permissions, error codes, retries that are safe to repeat, close on read; invariants 7 and 13; CUJ 5 | pytest + httpx against real Postgres (Docker locally, a CI service container), fake clock; example tests (Hypothesis doesn't fit a per-test database fixture) |
-| Close | Invariant 10; late writes detected; CUJs 2 and 3 | Real Postgres, fake clock, two separate database connections for the concurrency tests |
+| `domain/` scoring, eligibility, period math | The pure rules hold for all inputs | Hypothesis property tests for invariants 1–9, plus example tests for CUJs 3 and 4 |
+| API | Request rules, permissions, error codes, retries, close on read; invariants 11–13; CUJs 1 and 5 | pytest + httpx against real Postgres (Docker locally, a CI service container), fake clock; example tests (Hypothesis doesn't fit a per-test database fixture) |
+| Close | Invariant 10; late writes detected; CUJ 2 | Real Postgres, fake clock, two separate database connections for the concurrency tests |
 | Contract | The app client matches the API, and the API matches its schema | Client diff check + Schemathesis |
-| Mobile | Screens render scores, errors map to messages | Jest + React Native Testing Library |
+| Mobile | Screens render scores and deadlines, errors map to messages | Jest + React Native Testing Library |
 
 The goal is not a coverage percentage. Every invariant below has a named test of the type the table gives, and every CUJ has an example test.
 
 **Invariants:**
 
 1.  `0 ≤ points ≤ N` for every member.
-2.  Adding a check-in or a skip token never lowers that member's points, and never makes them a candidate if they weren't one before.
+2.  Adding a check-in never lowers that member's points, and never makes them a candidate if they weren't one before.
 3.  There is no loser if and only if fewer than 2 members are eligible or every eligible member has N points.
 4.  The loser is always eligible, and always has the lowest points among eligible members.
-5.  Adding, removing or changing the check-ins of `joined_mid_week` or `excused` members never changes who the candidates are.
+5.  Adding, removing or changing the check-ins of `joined_mid_period` or `excused` members never changes who the candidates are.
 6.  The same inputs give the same candidates, regardless of input order.
-7.  A second active check-in for the same `(user_id, local_date)` is rejected and changes no score.
-8.  `week_start(d)` is a Monday, `week_start(d) ≤ d`, and `d − week_start(d) < 7 days`.
-9.  For every UTC offset from −12:00 to +14:00, Sunday 23:59:59 local time is before `cutoff(W)`.
-10. Running the close any number of times, through either trigger and including concurrently, leaves exactly one result per group-week, with the same loser.
-11. A settings change never changes the settings of a week that has begun anywhere. (A new group's first settings row is the one exception; see Decided Rules.)
-12. Check-ins dated before a member's `joined_local_date` never change that member's points in that group.
-13. Removing a member during week W doesn't change their state or points for W.
+7.  Check-ins outside `[starts_at, ends_at)`, or before a mid-period joiner's `joined_at`, never change that member's points.
+8.  For every zone, start and length, `ends_at` is midnight in the zone, its local date is the start's local date plus `period_days`, and `ends_at > starts_at`, including across daylight-saving changes.
+9.  Successive periods are contiguous: each period's `starts_at` equals the previous period's `ends_at`.
+10. Running the close any number of times, through either trigger and including concurrently, leaves exactly one result per period, with the same loser.
+11. A settings change never changes a period that already exists.
+12. Removing a member during a period doesn't change their state or points for it.
+13. An undo, excusal or revocation that would change an ended period is rejected.
 
 ### Decisions in this section
 
-*   **D1. Close vs late check-ins.** Decided: Option A, time check plus delay. Revised after review to add the 30-second transaction bound and rescore detection.
-*   **D2. How closing is triggered.** Decided: Option B, a scheduler inside the API process kept awake by an uptime ping. Revised after review to add close on read, so results don't depend on the scheduler.
+*   **D1. Close vs late writes.** Decided: Option A, time check plus delay, with the 30-second transaction bound and rescore detection.
+*   **D2. How closing is triggered.** Decided: Option B, a scheduler inside the API process kept awake by an uptime ping, plus close on read, so results don't depend on the scheduler.
 *   **D3. TypeScript client generator.** Decided: Option A, openapi-typescript plus openapi-fetch. Query hooks are written by hand in `apps/mobile`.
 
 #### D1 options (decided: A)
 
 *   **Option A: time check plus a delay.**
-    *   *How it works:* every write checks `now < cutoff` before it touches the database. The close starts 5 minutes after the cutoff and reads only facts recorded before the cutoff. No extra locks.
-    *   *Trade-offs:* simple, with no lock ordering to reason about. Check-in requests never wait on the close.
-    *   *When it fails:* a write that passes the time check just before the cutoff, but commits after the close read the facts, isn't counted. The 30-second transaction timeout makes this practically impossible with a 5-minute delay, and rescore detection reports it if it happens anyway.
-*   **Option B: a lock per week (a "seal").**
-    *   *How it works:* every write for week `W` takes a shared transaction lock keyed on `W`, then checks the cutoff and that `W` isn't sealed. The close takes the same lock exclusively once, then records a seal. The cutoff is the same for every group, so one lock per week is enough.
-    *   *Trade-offs:* no write can slip past the close, and the 5-minute delay and the detection go away.
-    *   *When it fails:* writes for `W` wait while the seal is taken. A bug in lock handling blocks all writes for a week. It needs a concurrency test with two connections.
+    *   *How it works:* writes check the period's end before touching the database and again before commit. The close starts 5 minutes after the end and reads only facts recorded before it. No extra locks on writes.
+    *   *Trade-offs:* simple, with no lock ordering to reason about. Check-ins never wait on the close.
+    *   *When it fails:* a write that passes the pre-commit check but commits after the close read the facts isn't counted. The 30-second transaction timeout makes this practically impossible with a 5-minute delay, and rescore detection reports it if it happens anyway.
+*   **Option B: a lock per period (a "seal").**
+    *   *How it works:* every write that can affect a period takes a shared lock keyed on that period, then checks that it isn't sealed; the close takes the lock exclusively, then seals it.
+    *   *Trade-offs:* no write can slip past the close, and the delay and the detection go away.
+    *   *When it fails:* a check-in can affect one period in each of the member's groups, so it must lock several periods in a fixed order to avoid deadlocks. A bug in lock handling blocks writes for a whole group.
 *   **Option C: the database refuses late rows.**
-    *   *How it works:* a trigger on each fact table rejects any insert or update whose week already has a `week_results` row.
+    *   *How it works:* triggers reject writes whose period is already closed.
     *   *Trade-offs:* a bug in API code can't break it.
-    *   *When it fails:* `check_ins` has no group, so the trigger must look up every group the user belongs to on every check-in. Business rules split between Python and SQL. A race between the trigger's lookup and the close's insert still needs a lock to close fully.
+    *   *When it fails:* a check-in has no group, so the trigger must look up every group's period on every check-in. Business rules split between Python and SQL.
 
 #### D2 options (decided: B, plus close on read)
 
 *   **Option A: the hosting platform's scheduled job.**
-    *   *How it works:* the host (for example Render Cron Jobs or a Fly.io scheduled machine) starts `python -m socius_api.jobs.close_weeks` as its own process every 5 minutes.
+    *   *How it works:* the host starts `python -m socius_api.jobs.close_periods` as its own process every 5 minutes.
     *   *Trade-offs:* separate from web traffic. The trigger configuration depends on the host.
     *   *When it fails:* if the host's scheduler has an outage, nothing runs. Some hosts charge for scheduled jobs.
 *   **Option B: a scheduler inside the API process.**
-    *   *How it works:* APScheduler runs `close_weeks` every 5 minutes inside the FastAPI process.
+    *   *How it works:* APScheduler runs `close_periods` every 5 minutes inside the FastAPI process.
     *   *Trade-offs:* no extra service and nothing extra to configure.
     *   *When it fails:* free-tier hosts put the API to sleep when there's no traffic, and a sleeping process runs no jobs. The uptime ping and close on read cover this.
 *   **Option C: an outside scheduler calls a protected endpoint.**
-    *   *How it works:* an external service sends `POST /internal/jobs/close-weeks` with a secret token every 5 minutes.
+    *   *How it works:* an external service sends `POST /internal/jobs/close-periods` with a secret token every 5 minutes.
     *   *Trade-offs:* free, and it doesn't depend on the host.
     *   *When it fails:* GitHub documents that scheduled workflow runs can be delayed or dropped under high load, and it disables schedules after 60 days without repository activity. A long close runs inside a web request and can hit the host's request timeout.
 
@@ -483,11 +458,11 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 *   **Option B: @hey-api/openapi-ts.**
     *   *How it works:* generates types plus one SDK function per endpoint. An optional plugin also generates TanStack Query options and hooks.
     *   *Trade-offs:* fewer hand-written files than A.
-    *   *When it fails:* its configuration format has changed between major versions, so upgrades can mean regenerating and fixing call sites. The version must be pinned exactly.
+    *   *When it fails:* its configuration format has changed between major versions, so upgrades can mean regenerating and fixing call sites.
 *   **Option C: orval.**
     *   *How it works:* generates types and ready-to-use TanStack Query hooks for every endpoint. It can also generate mock servers.
     *   *Trade-offs:* the fewest hand-written files. The mocks help mobile tests.
-    *   *When it fails:* it generates one hook file per endpoint, which makes for large review diffs. Customizing auth headers or error handling goes through orval's configuration instead of plain code.
+    *   *When it fails:* large review diffs, and customizing auth headers or error handling goes through orval's configuration instead of plain code.
 
 --------------------------------------------------------------------------------
 
@@ -497,169 +472,158 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 
 #### Alternative A: Adherence scoring with a separate goal per member
 
-*   **How it works:** Each member sets their own weekly goal. Score = completed ÷ scheduled, with skip tokens and mid-week joins removed from the denominator.
-*   **Pros:** Fair across different goals. A member who trains three days a week can compete with one who trains five.
-*   **Cons:** Harder to explain ("why did 3/4 lose to 4/5?"). Needs a per-member schedule, ratio arithmetic and zero-denominator edge cases.
+*   **How it works:** Each member sets their own goal. Score = completed ÷ scheduled.
+*   **Pros:** Fair across different goals.
+*   **Cons:** Harder to explain ("why did 3/4 lose to 4/5?"); needs per-member schedules and ratio arithmetic.
 *   **Reason for Rejection:** Rejected by author: a shared target N keeps the group training toward the same thing, and makes raw points fair without a ratio. The cost is that members with different personal goals must agree on one N.
 
 #### Alternative B: Ties at the bottom share the loss
 
 *   **How it works:** Everyone tied for the lowest score takes the punishment.
-*   **Pros:** No randomness to explain. Easy to test.
-*   **Cons:** Two or three people doing one punishment ("buy dinner") is awkward, and a shared loss feels lighter.
-*   **Reason for Rejection:** Rejected by author: one person carrying the punishment keeps the stakes real. The cost is that a tied member can lose by chance, and the app has to store and show the tie-break.
+*   **Pros:** No randomness to explain.
+*   **Cons:** Two or three people doing one punishment is awkward, and a shared loss feels lighter.
+*   **Reason for Rejection:** Rejected by author: one person carrying the punishment keeps the stakes real. The cost is that a tied member can lose by chance; the result screen labels tie-breaks.
 
 #### Alternative C: No loser, or a shared punishment, when everyone scores 0
 
-*   **How it works:** If every member scores 0, nobody loses, or the whole group does the punishment together.
+*   **How it works:** If every member scores 0, nobody loses, or everyone does the punishment.
 *   **Pros:** Avoids one person taking the punishment for a shared failure.
-*   **Cons:** The whole group can skip a week together with no consequence.
-*   **Reason for Rejection:** Rejected by author: a group-wide skip should still cost someone, or the stakes disappear exactly when they matter. The cost is that one member is punished for a failure everyone shared.
+*   **Cons:** The whole group can skip a period together with no consequence.
+*   **Reason for Rejection:** Rejected by author: a group-wide skip should still cost someone. The cost is that one member is punished for a failure everyone shared.
 
-#### Alternative D: One time zone per group
+#### Alternative D: Fixed Monday–Sunday weeks with a global cutoff and per-day dating (the first version of this design)
 
-*   **How it works:** All dates and deadlines use one IANA zone set by the group admin.
-*   **Pros:** One clear day boundary per group, and simpler week math.
-*   **Cons:** Members in other zones, or travelling, have "days" that don't match their own calendar. A check-in would have to be dated in several zones for a member in several groups.
-*   **Reason for Rejection:** Rejected by author: the phone's own date matches what the member experiences, and lets one check-in count in every group. The cost is the 26-hour weekend overlap and a global cutoff that delivers results late in eastern zones.
+*   **How it works:** Each check-in is dated with the phone's local date, at most one per day. Every group's week closes at Monday 12:00 UTC, when Sunday has ended everywhere on Earth. A weekly skip token adds a free point.
+*   **Pros:** Each member's days match their own calendar; no group needs a time zone.
+*   **Cons:**
+    *   Two weeks are open at once for about 26 hours each weekend, which complicates settings changes, joins and new groups.
+    *   Results reach eastern zones late (Sydney around 23:00 Monday).
+    *   Weeks only; no other period lengths.
+*   **Reason for Rejection:** Rejected by author (ADR-0011): one deadline in the group's zone is easier to understand and removes the overlap logic entirely, and admins want periods other than a week. The cost is that members in other zones work to someone else's midnight, and daylight-saving changes need testing.
 
-#### Alternative E: Close each week when every member's own Sunday has ended
+#### Alternative E: One check-in per day
 
-*   **How it works:** The close time per group is the latest end-of-Sunday across its members' zones.
-*   **Pros:** Results arrive sooner for groups whose members are all in eastern zones.
-*   **Cons:** The close time moves when members travel or change zones, and has to be computed per group.
-*   **Reason for Rejection:** Rejected by author in favor of a single constant cutoff that needs no per-group computation. The cost is that results arrive late in eastern zones (Sydney about 23:00 Monday).
+*   **How it works:** At most one check-in per member per date.
+*   **Pros:** Stops someone banking a week's points in one day.
+*   **Cons:** Needs a definition of "day" for members in other zones, which is the complexity this design removes.
+*   **Reason for Rejection:** Rejected by author: honor system; every check-in counts. The cost is that a member can log two workouts in one day, which the group can see.
 
-#### Alternative F: A separate grace period until noon the next day
+#### Alternative F: A skip token per period
 
-*   **How it works:** A check-in for a date is accepted until 12:00 the following day.
-*   **Pros:** Covers late-night workouts and forgetting to tap.
-*   **Cons:** A second time window to define, on top of the week cutoff.
-*   **Reason for Rejection:** Rejected by author: any day of the open week can be logged under the honor system, so a second window adds nothing. The cost is that a member can log missed days late, up to the cutoff, after seeing the live leaderboard.
+*   **How it works:** Each member gets one free point per period.
+*   **Pros:** One sick day doesn't decide the period.
+*   **Cons:** Another rule, table and endpoint; and with N reachable on any day, a missed day can be made up.
+*   **Reason for Rejection:** Rejected by author: only check-ins count; admin excusals cover real absences. The cost is that a member who is sick for one day must make it up or ask the admin.
 
-#### Alternative G: Group-voted rest days
+#### Alternative G: Trust the phone's timestamp for which period a check-in is in
 
-*   **How it works:** Any member proposes a rest day, and it passes with a strict majority of all members.
-*   **Pros:** The group can agree to cancel a day together.
-*   **Cons:** A feature, two background jobs and a notification type. It made sense only when everyone trained on the same fixed days.
-*   **Reason for Rejection:** Rejected by author for v0.1: members choose their own days, and skip tokens and excusals cover individual absences. The cost is that the group can't lower the target for one week, for example a holiday week, without changing settings.
+*   **How it works:** The app records when the workout was logged, and the server uses that time, so a check-in made offline before the deadline still counts after it syncs.
+*   **Pros:** Honest offline check-ins aren't lost.
+*   **Cons:** Anyone can change their phone's clock to count a workout after the deadline.
+*   **Reason for Rejection:** Rejected by author: the server's time is the one clock everyone shares. The cost is that a check-in that reaches the server after the period ends counts in the next period.
 
-#### Alternative H: Member-declared travel opt-out
+#### Alternative H: Calendar-month periods
 
-*   **How it works:** A member opts out of a week before it starts, at most about once a month, and the group sees it.
-*   **Pros:** Members don't need to ask anyone.
-*   **Cons:** It needs a deadline, a frequency limit and a setting for that limit. It is a way to escape losing that members can trigger themselves.
-*   **Reason for Rejection:** Rejected by author: the admin excuses members instead, for any reason. The cost is that the admin becomes a gatekeeper, and an admin can still excuse themselves until Sunday ends (see Risks).
+*   **How it works:** A period runs from the 1st to the end of the month.
+*   **Pros:** Matches how people talk about months.
+*   **Cons:** Uneven lengths (28–31 days) and a second kind of period to compute and test.
+*   **Reason for Rejection:** Rejected by author: a whole number of days covers it (30 days is "a month"). The cost is that a 30-day period drifts against calendar months.
 
-#### Alternative I: Fixed-days mode in v0.1
+#### Alternative I: Group-voted rest days
 
-*   **How it works:** The admin picks specific weekdays, and only check-ins on those days count.
-*   **Pros:** Supports groups who train together on set days.
-*   **Cons:** It doubles the setup screens, the scoring paths and the test space. Weekdays become ambiguous once dates follow each phone's zone.
-*   **Reason for Rejection:** Rejected by author for v0.1. The cost is that groups who train on set days can't enforce them yet. See Future Improvements.
+*   **How it works:** Any member proposes a rest day, and it passes with a strict majority.
+*   **Pros:** The group can agree to lower the bar together.
+*   **Cons:** A feature, background jobs and a notification type.
+*   **Reason for Rejection:** Rejected by author for v0.1: excusals cover individual absences, and the admin can lower N for the next period. The cost is that the current period can't be eased mid-way.
 
-#### Alternative J: Detecting changed clocks and backdated dates
+#### Alternative J: Members can opt out or leave on their own
 
-*   **How it works:** The server compares the date the phone sends with the time it received the request, and rejects dates that aren't plausible.
-*   **Pros:** Harder to cheat.
-*   **Cons:** Rejects honest offline check-ins, and adds rules that conflict with trusting the group.
-*   **Reason for Rejection:** Rejected by author: the groups are people who know each other, and the honor system is part of the product. The cost is that clock changes and backdating within the open week go undetected. Only dates later than "today" anywhere on Earth are rejected.
+*   **How it works:** A member opts out of a period, or leaves the group, without asking anyone.
+*   **Pros:** Members control their own participation.
+*   **Cons:** Both are ways to escape losing: leaving and rejoining would make a member a mid-period joiner who can't lose.
+*   **Reason for Rejection:** Rejected by author: only admins excuse or remove members, and a re-add in the same period restores the earlier state. The cost is that a member who wants out must ask the admin, or delete their account.
 
-#### Alternative K: Configurable week length
-
-*   **How it works:** Groups choose a period length, for example 7 or 14 days.
-*   **Pros:** Flexible.
-*   **Cons:** Every date calculation gets a variable, and the global cutoff stops being a single rule.
-*   **Reason for Rejection:** Rejected by author: one Monday-to-Sunday week keeps the cutoff a single constant. The cost is that groups who want fortnightly stakes can't have them.
-
-#### Alternative L: Members can leave a group on their own
-
-*   **How it works:** Any member can leave at any time.
-*   **Pros:** Members control their own membership.
-*   **Cons:** Leaving and rejoining mid-week turns a member into a mid-week joiner who can't lose.
-*   **Reason for Rejection:** Rejected by author: only admins remove members, and a re-add in the same week restores the earlier state. The cost is that a member who wants out has to ask the admin, or delete their account.
-
-#### Alternative M: Self-excusal needs another member's confirmation
+#### Alternative K: Self-excusal needs another member's confirmation
 
 *   **How it works:** An admin's excusal of themselves stays pending until another member confirms it.
 *   **Pros:** Closes the last way for an admin to dodge a loss.
-*   **Cons:** It needs a pending state, a confirmation flow and an expiry, for a small group that already sees every excusal.
-*   **Reason for Rejection:** Rejected by author: the Sunday deadline removes the Monday-morning window, which was the main abuse. The cost is that an admin can still excuse themselves on Sunday evening (see Risks).
+*   **Cons:** A pending state, a confirmation flow and an expiry, for a small group that already sees every excusal.
+*   **Reason for Rejection:** Rejected by author: the group sees every excusal and who made it. The cost is that an admin can still excuse themselves just before the deadline (see Risks).
 
 ### Architecture
 
-#### Alternative N: Store running scores per group
+#### Alternative L: Store running scores per group
 
-*   **How it works:** Each check-in increments a counter for each group the member belongs to. The close reads the counters.
+*   **How it works:** Each check-in increments a counter for each group the member belongs to.
 *   **Pros:** Leaderboard reads are a single row lookup.
-*   **Cons:** Every check-in, undo, skip token, excusal and membership change must update every affected counter correctly. A bug leaves counters wrong with no way to recompute them.
-*   **Reason for Rejection:** Rejected: one pure function used by both the live leaderboard and the close gives a single definition of scoring. The cost is recomputing at most 56 check-in rows per request.
+*   **Cons:** Every check-in, undo, excusal and membership change must update every affected counter correctly; a bug leaves counters wrong with no way to recompute them.
+*   **Reason for Rejection:** Rejected: one pure function used by both the live leaderboard and the close gives a single definition of scoring. The cost is recomputing a few hundred rows at most per request.
 
-#### Alternative O: A row per open week, created ahead of time, with session rows
+#### Alternative M: Compute periods from the settings history, with no period rows
 
-*   **How it works:** A job creates a `periods` row and one `sessions` row per training day at the start of each week. That was the original HLD design.
-*   **Pros:** The current week is explicit in the database.
-*   **Cons:** It assumes one current week per group, so it can't represent two weeks open at once. It adds a creation job that must itself run on time.
-*   **Reason for Rejection:** Rejected: weeks keyed by their Monday handle the overlap with no extra job. The cost is that "which weeks exist" is derived, not listed.
+*   **How it works:** Derive every period's boundaries on the fly from the first start date and the history of length and zone changes.
+*   **Pros:** One less table.
+*   **Cons:** Every read replays the whole settings history, and a bug in that replay silently moves past deadlines.
+*   **Reason for Rejection:** Rejected: a stored row per period fixes its boundaries and settings once. The cost is creating rows ahead of use, which `ensure_current_period` does idempotently.
 
-#### Alternative P: A replayable SHA-256 tie-break with a stored seed
+#### Alternative N: A replayable SHA-256 tie-break with a stored seed
 
-*   **How it works:** Store a random seed, and pick `sha256(seed ‖ group_id ‖ week_start) mod k` over sorted candidates, so the draw can be replayed later.
-*   **Pros:** The draw can be audited after the fact. With a seed derived from a server secret, it could also support a draw members can verify.
-*   **Cons:** Saved results are never recomputed, so nothing replays the draw. It needs a byte-level encoding spec, fixed test vectors and a version column.
+*   **How it works:** Store a random seed, and pick `sha256(seed ‖ period) mod k` over sorted candidates, so the draw can be replayed.
+*   **Pros:** The draw can be audited; with a seed derived from a server secret, it could support a draw members can verify.
+*   **Cons:** Saved results are never recomputed, so nothing replays the draw.
 *   **Reason for Rejection:** Rejected by author: `secrets.choice` plus the stored candidates and loser covers retries and history. The cost is that a verifiable draw later needs a seed column and a migration.
 
-#### Alternative Q: Other ways to protect the close (D1 options B and C)
+#### Alternative O: Other ways to protect the close (D1 options B and C)
 
-*   **How it works:** a per-week lock ("seal") or database triggers. See "D1 options".
-*   **Reason for Rejection:** Rejected by author in favor of a time check plus delay, bounded by 30-second transaction timeouts and checked by rescoring. The cost is that a slip-through is detected, not prevented.
+*   **How it works:** a per-period lock ("seal") or database triggers. See "D1 options".
+*   **Reason for Rejection:** Rejected by author in favor of a time check plus delay, bounded by the transaction timeout and checked by rescoring. The cost is that a slip-through is detected, not prevented.
 
-#### Alternative R: Other ways to trigger the close (D2 options A and C)
+#### Alternative P: Other ways to trigger the close (D2 options A and C)
 
 *   **How it works:** the host's scheduled job, or an external scheduler calling an endpoint. See "D2 options".
 *   **Reason for Rejection:** Rejected by author in favor of an in-process scheduler plus close on read, which keeps everything in one deployable service. The cost is that the process must stay awake for notifications to be on time.
 
-#### Alternative S: Scheduler only, with no close on read
+#### Alternative Q: Scheduler only, with no close on read
 
-*   **How it works:** Only the scheduled job closes weeks.
+*   **How it works:** Only the scheduled job closes periods.
 *   **Pros:** Read requests never write to the database.
 *   **Cons:** If the process sleeps or the scheduler fails, results don't exist until it recovers.
 *   **Reason for Rejection:** Rejected by author: results should be correct whenever someone looks. The cost is a GET request that can write, which needs the same tests as the job.
 
-#### Alternative T: Other client generators (D3 options B and C)
+#### Alternative R: Other client generators (D3 options B and C)
 
 *   **How it works:** @hey-api/openapi-ts or orval. See "D3 options".
 *   **Reason for Rejection:** Rejected by author in favor of openapi-typescript plus openapi-fetch. The cost is hand-written query hooks, kept consistent by one key-factory module.
 
 ### Tooling
 
-#### Alternative U: Bazel (or Nx / Turborepo) as the build system
+#### Alternative S: Bazel (or Nx / Turborepo) as the build system
 
 *   **How it works:**
     *   **Bazel:** a single build system for every language, with hermetic builds and a cache that can be shared across machines.
     *   **Nx and Turborepo:** task runners and caches for JavaScript-heavy monorepos.
 *   **Pros:** Builds that repeat exactly, and faster CI for very large repos.
 *   **Cons:** Expo's build tools (Metro, EAS) don't run through Bazel, so there would be two build systems. Every package needs BUILD files, and Bazel's Python and JavaScript rules are complex. The benefits only appear with many engineers and build targets; this repo has three packages.
-*   **Reason for Rejection:** Rejected by author: pnpm + uv + a root `justfile` matches the repo's size. The cost is no shared build cache, which matters only at a size this repo isn't near. The tooling ADR states when to revisit: CI time, number of packages, or more contributors.
+*   **Reason for Rejection:** Rejected by author: pnpm + uv + a root `justfile` matches the repo's size. The cost is no shared build cache. The tooling ADR states when to revisit: CI time, number of packages, or more contributors.
 
-#### Alternative V: A branch-coverage percentage as the testing target
+#### Alternative T: A branch-coverage percentage as the testing target
 
 *   **How it works:** CI fails below a set percentage of covered branches.
 *   **Pros:** Easy to measure and enforce in CI.
-*   **Cons:** Coverage shows which lines ran, not whether results were checked. A near-100% target rewards tests that don't check anything.
-*   **Reason for Rejection:** Rejected: the target is that every written invariant has a property test and every CUJ has an example test. Coverage is still reported. The cost is that the gate is a checklist reviewed by a person, not a number checked by CI.
+*   **Cons:** Coverage shows which lines ran, not whether results were checked.
+*   **Reason for Rejection:** Rejected: the target is that every written invariant and every CUJ has a named test. Coverage is still reported. The cost is that the gate is a checklist reviewed by a person, not a number checked by CI.
 
 --------------------------------------------------------------------------------
 
 ## Non-Functional Requirements
 
 *   **Privacy.**
-    *   A check-in's `tz_name` and `utc_offset_minutes` are never returned to anyone, because they reveal location and travel. Group members see only that a member checked in on a date.
+    *   Group members see each other's points and check-in times, shown in the group's time zone. Members' own time zones are never stored with check-ins; the phone's current zone is stored only on `push_tokens` for reminders, and is never returned to anyone.
     *   The reason for an excusal is never stored.
-    *   Every group endpoint checks that the caller is an active member. Admin endpoints also check `role = admin`. Both rules have tests.
+    *   Every group endpoint checks that the caller is an active member (or, for reading a period, was in its member set). Admin endpoints also check `role = admin`. Both rules have tests.
 *   **Performance.**
-    *   Live leaderboard reads recompute scores from at most 56 check-in rows. No caching layer is added.
-    *   At roughly 50 ms per group-week, one scheduled run closes about 1,200 group-weeks a minute, far above v0.1 needs. Revisit at 1,000 groups.
+    *   Live leaderboard reads recompute scores from at most a few hundred rows. No caching layer is added.
+    *   At roughly 50 ms per period, one scheduled run closes about 1,200 periods a minute, far above v0.1 needs. Revisit at 1,000 groups.
 *   **Rollout.**
     *   Nothing is deployed yet, so there is no data to migrate. The first Alembic migration creates the schema in this document.
     *   A change to the scoring rules increments `scoring_version`. Results already saved are never recomputed.
@@ -674,18 +638,17 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 | Risk | Impact | Mitigation | Detection |
 |---|---|---|---|
 | The host suspends or sleeps the free service despite the keep-alive ping | Notifications late; results still correct (close on read) | Render free tier with one service; fallback to a small always-on machine with the author's approval | Heartbeat failure signal; overdue count |
-| One process carries web traffic and the close | A slow close delays requests, or a crash stops both | The close is short (one transaction per group-week); close on read covers scheduler gaps | Error tracker; heartbeat |
+| One process carries web traffic and the close | A slow close delays requests, or a crash stops both | The close is short (one transaction per period); close on read covers scheduler gaps | Error tracker; heartbeat |
 | Free-tier Postgres pauses, expires or loses data | Closed results can't be rebuilt without facts | Don't use Render's free Postgres (expires after 30 days); choose a host with backups; export regularly | Host notifications; failed close runs |
 | A free Supabase project pauses after inactivity | Nobody can sign in until it is resumed | Verify Supabase's current pause policy; keep the project active or move to a paid plan with the author's approval | Error tracker (401 spike); Supabase email |
-| Supabase Auth outage | Nobody can sign in or call the API | None in v0.1; accepted | Error tracker (401 spike) |
-| Expo Push outage | Results notifications late or lost | Outbox keeps unsent rows; delivery is at least once | `notification_outbox` rows with no `sent_at` |
-| Clock skew between processes | A write accepted or rejected a few seconds early or late | NTP on hosts; 5-minute close delay | None needed at this tolerance |
-| Abuse of write endpoints | Spam check-ins or settings churn | Small invite-only groups; rate limiting deferred | Error tracker; database growth |
-| A late write or undo commits after the close | One member's count differs from the saved result | 30-second transaction timeouts; 5-minute delay | Rescore mismatch count (G1 failure if non-zero) |
-| The close misses 12:15 UTC | Results late | Scheduler every 5 minutes; close on read | Overdue count; heartbeat failure after 13:00 |
-| Zone data reveals location | Members learn where someone travelled | Zone and offset never returned in any response | Privacy tests |
-| An admin excuses themselves on Sunday evening | An admin dodges a loss | Sunday deadline (phone date); excusals visible to the group with who excused whom | Visible on the result screen (accepted risk) |
-| Backdating within the open week after seeing the leaderboard | A member fills in missed days late | Honor system; check-ins visible to the group | Visible check-in dates (accepted risk) |
+| Expo Push outage | Results notifications late or lost | Outbox keeps unsent rows; delivery is at least once | Outbox rows with no `sent_at` |
+| Members in other zones misjudge the deadline | A member thinks they have until their own midnight and misses the deadline | The app shows each group's deadline in the member's local time, with a countdown | Group feedback |
+| Daylight-saving changes | A period ends an hour earlier or later than someone expected | Boundaries are midnights in the group's zone, computed with `zoneinfo`; invariant 8 covers DST | Property tests |
+| Offline check-in reaches the server after the deadline | A real workout counts in the next period instead | Stated rule; the app warns when a check-in is queued close to the deadline | Accepted risk |
+| A late write commits after the close | One member's count differs from the saved result | 30-second transaction timeout; 5-minute delay | Rescore mismatch count (G1 failure if non-zero) |
+| An admin excuses themselves just before the deadline | An admin dodges a loss | Excusals are visible to the group with who made them | Visible on the result screen (accepted risk) |
+| A member banks many check-ins on the last day | Points reflect taps, not training | Honor system; check-in times are visible to the group | Accepted risk |
+| A group goes idle for months | Each elapsed period still closes with a loser (everyone at 0) | Expected under the rules; pausing a group is a future improvement | Visible in history |
 | Deleted accounts in history | Results show a missing member | Still open; account-deletion spec decides | — |
 
 --------------------------------------------------------------------------------
@@ -694,9 +657,10 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 
 These ideas were deferred, not rejected:
 
-*   **Fixed-days mode.** The admin picks specific weekdays, and only check-ins on those days count. It can be added later as a weekday filter on `score_week`, without changing the other scoring rules.
-*   **Closing a group early.** A group's week could close as soon as its result can no longer change, for example when every eligible member has reached N. That would make results arrive sooner in eastern time zones. Monday 12:00 UTC stays the latest close. The cost is a third way for a week to close, which needs its own tests.
-*   **A tie-break members can verify.** Publish a hash of a seed when the week opens and reveal the seed at close, so any member can recompute the draw. This needs a seed column and the encoding described in Alternative P. It pairs with the deferred suspense animation.
+*   **Fixed training days.** The admin picks weekdays, and only check-ins on those days (in the group's zone) count.
+*   **Closing a period early.** A period could close as soon as its result can no longer change, for example when every eligible member has reached N.
+*   **A tie-break members can verify.** Publish a hash of a seed when the period opens and reveal the seed at close, so any member can recompute the draw. This needs a seed column and the encoding described in Alternative N. It pairs with the deferred suspense animation.
+*   **Pausing a group.** An admin could pause a group so idle periods don't produce losers.
 
 --------------------------------------------------------------------------------
 
@@ -705,9 +669,9 @@ These ideas were deferred, not rejected:
 The plan has two parts.
 
 *   **Part A (the engine):** everything needed to build and test the game engine without a phone. It also includes the scaffold, CI and the generated client that the contract check needs.
-*   **Part B (follow-ups):** the documentation rewrites (Stage 8, done) and the mobile app (Stage 9). Part B's screens need spec 0001 (groups and invites) to be useful.
+*   **Part B (follow-ups):** the documentation updates (Stage 8, done) and the mobile app (Stage 9). Part B's screens need spec 0001 (groups and invites) to be useful.
 
-Each stage is one or more small PRs with green CI, and each stage depends on the ones before it, with one exception: the Expo scaffold (item 65) may be pulled forward so the Phase 0 sign-in check can run on a real phone. Items marked **[default]** were proposed defaults. Those in the original plan were approved by the author; three added after the consistency review (several admins, removed members' access to their weeks, a new group's first settings row) are listed as unconfirmed in CLAUDE.md until the author confirms them. Database access is synchronous (Decision D4, at the end of this section).
+Each stage is one or more small PRs with green CI, and each stage depends on the ones before it, with one exception: the Expo scaffold (item 48) may be pulled forward so the Phase 0 sign-in check can run on a real phone. Database access is synchronous (Decision D4, at the end of this section).
 
 ### Part A, Stage 1: Repository scaffold and CI
 
@@ -812,7 +776,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   sqlalchemy 2.x, alembic, psycopg[binary] 3.x
         *   pyjwt[crypto] for verifying Supabase JWTs
         *   apscheduler 3.x (the stable line; 4.0 is still pre-release). It ships no type information, so it is used from one small wrapper module (`jobs/scheduler.py`) with a narrow pyright suppression.
-        *   tzdata, so time zone validation works on slim Docker images without system zone data
+        *   tzdata, so time zone math and validation work on slim Docker images without system zone data
         *   sentry-sdk, httpx
     *   **Dev dependencies:** pytest, hypothesis, schemathesis, ruff, pyright.
     *   **Tool settings:**
@@ -821,43 +785,40 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   pytest markers `db` and `concurrency`
         *   a Hypothesis profile `ci` with more examples
 
-#### 12. `services/api/src/socius_api/domain/weeks.py` (Create)
+#### 12. `services/api/src/socius_api/domain/periods.py` (Create)
 
-*   **Type / Scope:** Pure week arithmetic.
+*   **Type / Scope:** Pure period arithmetic.
 *   **Proposed Changes:**
+    *   **Types:** `PeriodBounds(starts_at: datetime, ends_at: datetime)`, aware UTC.
     *   **Functions:**
-        *   `week_start(local_date: date) -> date`
-        *   `sunday(week_start: date) -> date`
-        *   `cutoff(week_start: date) -> datetime`: aware UTC, `week_start + 7 days, 12:00 UTC`.
-        *   `close_due_at(week_start) -> datetime`: `cutoff + 5 min`.
-        *   `overdue_at(week_start) -> datetime`: `cutoff + 60 min`.
-        *   `begins_anywhere_at(week_start) -> datetime`: `week_start 00:00` at UTC+14.
-        *   `is_open(week_start, now: datetime) -> bool`
-        *   `latest_local_date(now) -> date`: the date at UTC+14.
-        *   `next_effective_week(now) -> date`: `week_start(latest_local_date(now)) + 7 days`.
-    *   **Validation:** each function that takes a `week_start` raises `ValueError` if it isn't a Monday.
+        *   `local_midnight(day: date, tz_name: str) -> datetime`: midnight at the start of `day` in the zone, as UTC.
+        *   `first_period(start_day: date, tz_name: str, period_days: int) -> PeriodBounds`
+        *   `next_period(previous_ends_at: datetime, tz_name: str, period_days: int) -> PeriodBounds`: starts at `previous_ends_at`; ends at midnight after `period_days` local days, computed from the start's local date in `tz_name`.
+        *   `contains(bounds, instant) -> bool`: `starts_at ≤ instant < ends_at`.
+        *   `close_due_at(bounds) -> datetime`: `ends_at + 5 min`.
+        *   `overdue_at(bounds) -> datetime`: `ends_at + 60 min`.
+    *   **Validation:** raises `ValueError` for `period_days` outside 1–365 or an unknown zone.
 
 #### 13. `services/api/src/socius_api/domain/scoring.py` (Create)
 
 *   **Type / Scope:** Pure eligibility, scoring and the loser rule.
 *   **Proposed Changes:**
     *   **Types** (frozen dataclasses):
-        *   `MemberState`, an enum: `ELIGIBLE`, `JOINED_MID_WEEK`, `EXCUSED`.
-        *   `MemberWeekInput`:
+        *   `MemberState`, an enum: `ELIGIBLE`, `JOINED_MID_PERIOD`, `EXCUSED`.
+        *   `MemberPeriodInput`:
             *   `user_id: UUID`
-            *   `joined_local_date: date`
+            *   `joined_at: datetime`
             *   `excused: bool`
-            *   `check_in_dates: frozenset[date]`, active check-ins only
-            *   `skip_token_used: bool`
-        *   `MemberScore`: `user_id`, `state`, `check_in_days`, `skip_token_used`, `points`.
-        *   `WeekOutcome`:
+            *   `check_in_times: tuple[datetime, ...]`, active check-ins only
+        *   `MemberScore`: `user_id`, `state`, `counted_check_ins`, `points`.
+        *   `PeriodOutcome`:
             *   `scores: tuple[MemberScore, ...]`, sorted by user ID
             *   `candidates: tuple[UUID, ...]`, sorted by user ID
             *   `kind`: one of `NO_LOSER_TOO_FEW_ELIGIBLE`, `NO_LOSER_ALL_REACHED_TARGET`, `SINGLE_LOSER`, `TIEBREAK_NEEDED`
     *   **Functions:**
-        *   `member_state(joined_local_date, excused, week_start) -> MemberState`. Joining mid-week takes precedence over an excusal.
-        *   `points(member, target_n, week_start) -> int`. It counts dates inside the week, from `joined_local_date` onwards, plus the token, up to `target_n`.
-        *   `score_week(target_n: int, week_start: date, members: Sequence[MemberWeekInput]) -> WeekOutcome`
+        *   `member_state(joined_at, excused, bounds) -> MemberState`. Joining mid-period takes precedence over an excusal.
+        *   `points(member, target_n, bounds) -> int`. It counts check-ins inside the bounds and, for a mid-period joiner, at or after `joined_at`, up to `target_n`.
+        *   `score_period(target_n: int, bounds: PeriodBounds, members: Sequence[MemberPeriodInput]) -> PeriodOutcome`
         *   `pick_loser(candidates: Sequence[UUID], choose: Callable[[Sequence[UUID]], UUID] = secrets.choice) -> UUID`. It sorts the candidates by UUID, then calls `choose`. Tests pass a fixed `choose`.
     *   **Version:** `SCORING_VERSION = 1`.
 
@@ -870,39 +831,38 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Hypothesis strategies.
 *   **Proposed Changes:**
-    *   **Dates:** Monday dates between 2020 and 2040, and sets of dates within and around a week.
-    *   **Members:** members with random join dates, excusals, check-ins and token use; groups of 1–8 members.
-    *   **Targets:** `target_n` from 1 to 7.
-    *   **Offsets:** UTC offsets from −720 to +840 minutes.
+    *   **Zones:** a fixed list of IANA zones that includes ones with and without daylight saving, half-hour and 45-minute offsets, and the extremes (`Pacific/Kiritimati`, `Etc/GMT+12`).
+    *   **Periods:** start days between 2020 and 2040, lengths 1–365.
+    *   **Members:** members with random join times, excusals and check-in times inside and around a period; groups of 1–8 members.
+    *   **Targets:** `target_n` from 1 to 100.
 
-#### 16. `services/api/tests/domain/test_weeks.py` (Create)
+#### 16. `services/api/tests/domain/test_periods.py` (Create)
 
 *   **Type / Scope:** Property and example tests.
 *   **Proposed Changes:**
-    *   **Properties:** invariants 8, 9 and 11. For 11: `next_effective_week(now)` is always later than every week that has begun anywhere at `now`. A new group's first settings row is covered by an example in item 41.
+    *   **Properties:** invariants 8 and 9.
     *   **Examples:**
-        *   the year boundary (2026-12-31 and 2027-01-01)
-        *   leap day
-        *   the cutoff instant itself, which counts as closed
-        *   one microsecond before the cutoff, which counts as open
-        *   `next_effective_week` on Saturday 23:00 UTC versus Sunday 10:00 UTC
+        *   a 7-day period across the spring and autumn DST changes in `America/Chicago` (167 and 169 hours)
+        *   a 1-day period and a 365-day period across a leap day
+        *   a zone change between periods: the new period starts at the old end and ends at a midnight in the new zone
+        *   the end instant itself, which counts as closed; one microsecond before it, which counts as open
 
 #### 17. `services/api/tests/domain/test_scoring_properties.py` (Create)
 
 *   **Type / Scope:** Property tests.
 *   **Proposed Changes:**
-    *   **Invariants:** 1–6 and 12, one test function each, named after the invariant. (Invariants 7 and 13 depend on the database and are tested in item 41; invariant 10 in items 42–43.)
+    *   **Invariants:** 1–7, one test function each, named after the invariant.
     *   **Tie-break:** `pick_loser` always returns a member of the candidates. Over 1,000 calls with `secrets.choice`, every candidate in a set of 2–8 is picked at least once.
 
 #### 18. `services/api/tests/domain/test_scoring_examples.py` (Create)
 
 *   **Type / Scope:** Example tests.
 *   **Proposed Changes:**
-    *   **CUJs:** one test each for CUJs 1–4, with their exact numbers.
+    *   **CUJs:** CUJs 3 and 4, with their exact numbers.
     *   **Small groups:** a solo group; a couple where one member is excused.
     *   **Ties:** everyone at 0, which needs a tie-break among everyone.
-    *   **Joiners:** a joiner whose earlier check-ins are ignored. (A member removed on Wednesday who still loses is an API test in item 41, because removal is a database concept.)
-    *   **Other cases:** N = 1 with a skip token; a check-in outside the week, which is ignored.
+    *   **Joiners:** a joiner whose check-ins before joining are ignored.
+    *   **Cap:** N = 1; a member with ten check-ins scores N.
 
 #### 19. `services/api/tests/domain/test_purity.py` (Create)
 
@@ -916,7 +876,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Alembic setup.
 *   **Proposed Changes:**
     *   **Connection:** migrations read `DATABASE_URL` from the settings.
-    *   **Comparison:** migrations are compared against `db/models.py` metadata.
+    *   **Comparison:** migrations are compared against `db/models.py` metadata. Autogenerate tends to report spurious differences on partial-index predicates, so generated migrations are checked by hand.
     *   **Naming:** a naming convention for constraints keeps migrations stable.
 
 #### 21. `services/api/migrations/versions/0001_game_engine.py` (Create)
@@ -927,14 +887,14 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `users`: id, auth_provider_id, display_name, created_at, deleted_at
         *   every table in the data model
     *   **Checks:**
-        *   `target_n BETWEEN 1 AND 7`
-        *   every `week_start` and `effective_week_start` is a Monday (`EXTRACT(ISODOW FROM …) = 1`)
-        *   `utc_offset_minutes BETWEEN -720 AND 840`
+        *   `target_n BETWEEN 1 AND 100`, `period_days BETWEEN 1 AND 365`
+        *   `ends_at > starts_at` on `periods`
     *   **Partial unique indexes:** exactly as listed in the data model.
     *   **No database clock:** no `server_default=now()` on any column used by business logic.
     *   **Indexes:**
         *   `memberships (user_id)`
-        *   `check_ins (user_id, local_date)`
+        *   `check_ins (user_id, recorded_at)`
+        *   `periods (closed_at, ends_at)` for finding due periods
         *   `notification_outbox (id) WHERE sent_at IS NULL`
 
 #### 22. `services/api/src/socius_api/db/models.py` (Create)
@@ -956,19 +916,16 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Query functions, the only place SQL lives. They are plain functions, not repository classes: there is only one implementation, so an abstraction layer adds nothing.
 *   **Proposed Changes:**
-    *   **Week inputs:**
-        *   `member_set(session, group_id, week_start)` returns the memberships in the week, using the rule in "Eligibility and the loser rule".
-        *   `load_week_inputs(session, group_id, week_start, recorded_before: datetime | None) -> (settings, list[MemberWeekInput])`. It loads active facts only. `recorded_before` is `None` for live reads and the cutoff for closing and rescoring.
-        *   `settings_for_week(session, group_id, week_start)`.
+    *   **Periods:**
+        *   `ensure_current_period(session, group_id, now) -> Period | None`: inserts any missing periods up to the one containing `now`, using `domain.periods` and the current `group_settings`, with `INSERT … ON CONFLICT (group_id, seq) DO NOTHING`. Returns `None` before the group's first start date.
+        *   `period_by_seq(session, group_id, seq)`, `periods_containing(session, user_id, instant)`: the period in each of the user's groups that contains `instant`.
+    *   **Inputs:** `load_period_inputs(session, period) -> list[MemberPeriodInput]`: the member set, active excusals, and active check-ins inside the period's bounds.
     *   **Close:**
-        *   `due_group_weeks(session, now, lookback_weeks=8) -> list[(group_id, week_start)]`. It covers groups whose member set for the week isn't empty.
-        *   `lock_group_week(session, group_id, week_start)`. It calls the blocking `pg_advisory_xact_lock(hashtextextended(group_id::text || week_start::text, 0))`. `hashtextextended` (PostgreSQL 11+) gives a 64-bit key; a collision only makes two closes wait for each other.
-        *   `insert_week_result(...) -> bool`. It uses `INSERT … ON CONFLICT DO NOTHING RETURNING` and returns false if a result already existed.
-        *   `recently_closed(session, now, hours=24)`.
-        *   `saved_member_results(session, group_id, week_start)`.
-        *   `count_overdue(session, now, lookback_weeks=8)`.
+        *   `due_periods(session, now, lookback_days=30)`: periods not closed whose `ends_at + 5 min ≤ now`.
+        *   `lock_period(session, period_id)`: calls the blocking `pg_advisory_xact_lock(hashtextextended(period_id::text, 0))`. `hashtextextended` (PostgreSQL 11+) gives a 64-bit key; a collision only makes two closes wait for each other.
+        *   `save_result(...) -> bool`: `UPDATE periods SET … WHERE id = :id AND closed_at IS NULL`; returns false if the period was already closed.
+        *   `recently_closed(session, now, hours=24)`, `saved_member_results(session, period_id)`, `count_overdue(session, now)`.
     *   **Outbox:** `unsent_outbox(session, limit=100)` uses `FOR UPDATE SKIP LOCKED`; `mark_sent(...)`.
-    *   **Check-ins:** `user_groups_for_week(session, user_id, week_start)`, used by the check-in response.
 
 #### 25. `services/api/src/socius_api/clock.py` (Create)
 
@@ -979,7 +936,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `SystemClock`.
         *   `FixedOffsetClock`, used when `FAKE_NOW` is set in staging. It starts at `FAKE_NOW` and advances with real time.
     *   **Production guard:** startup refuses `FAKE_NOW` when `APP_ENV=production`.
-    *   **Wiring:** a FastAPI dependency `get_clock`, overridden in tests. The scheduler passes the same clock to `close_weeks`.
+    *   **Wiring:** a FastAPI dependency `get_clock`, overridden in tests. The scheduler passes the same clock to `close_periods`.
     *   **Tests:** `FakeClock` lives in `tests/support/clock.py`.
 
 ### Part A, Stage 4: API
@@ -1008,17 +965,13 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **Handler:** an exception handler that returns `application/problem+json` with `type: "https://socius.app/problems/<code>"`. Request validation errors also become problem responses (code `invalid-request`, 422), and the OpenAPI schema's default 422 entry is replaced to match.
     *   **Schema:** one `Problem` response model, whose `code` field is the enum below. Every route declares its possible error statuses with `responses=` under `application/problem+json`, so the codes appear in the generated TypeScript and Schemathesis sees every status as documented.
     *   **Codes:**
-        *   `already-checked-in`
-        *   `week-closed`
-        *   `date-not-accepted`
-        *   `token-already-used`
+        *   `period-closed`
         *   `not-admin`
         *   `not-member` (404)
         *   `target-not-member`
-        *   `excusal-window-closed`
-        *   `invalid-target`
-        *   `group-full`
         *   `not-found`
+        *   `invalid-settings`
+        *   `group-full`
         *   `request-conflict`
         *   `invalid-request`
         *   `unauthenticated`
@@ -1028,70 +981,57 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Pydantic request and response models.
 *   **Proposed Changes:**
     *   **Check-ins:**
-        *   `CheckInCreate`: `local_date` (2000-01-01 to 2100-12-31), `tz_name` (checked against `zoneinfo.available_timezones()`, computed once at startup), `utc_offset_minutes` (−720 to 840), `captured_at`, `client_request_id`. Bounds are checked in the model so out-of-range input gets 422, never a 500 from date arithmetic or a database constraint.
-        *   `CheckInOut`: `local_date`, `week_start`, `cutoff`, `counted_in_group_ids`.
-    *   **Weeks:**
-        *   `MemberScoreOut`: `user_id`, `display_name`, `state`, `points`, `check_in_days`, `skip_token_used`, `is_loser`.
-        *   `WeekOut`:
-            *   `group_id`, `week_start`, `cutoff`
+        *   `CheckInCreate`: `client_request_id`.
+        *   `CheckInOut`: `id`, `recorded_at`, `counted_in`, a list of `{group_id, period_seq, ends_at}`.
+    *   **Periods:**
+        *   `MemberScoreOut`: `user_id`, `display_name`, `state`, `points`, `counted_check_ins`, `is_loser`.
+        *   `PeriodOut`:
+            *   `group_id`, `seq`, `starts_at`, `ends_at`, `tz_name`
             *   `status`: `open`, `closing` or `closed`
             *   `target_n`, `punishment_text`, `members`
             *   `has_loser`, `loser_user_id`, `was_tiebreak`
             *   `excusals`, a list of `{user_id, excused_by, recorded_at}`
-    *   **Skip tokens:** `SkipTokenOut`: `wasted: bool`.
-    *   **Excusals:** `ExcusalCreate`: `current_local_date`, the admin's phone date.
-    *   **Settings:** `SettingsUpdate` and `SettingsOut`: `target_n`, `punishment_text`, `effective_week_start`.
-    *   **Push:** `PushTokenCreate`.
-    *   **Privacy:** `tz_name` and `utc_offset_minutes` appear in no response.
+    *   **Settings:** `SettingsUpdate` and `SettingsOut`: `target_n` (1–100), `period_days` (1–365), `tz_name` (checked against `zoneinfo.available_timezones()`, computed once at startup), `punishment_text`, and `applies_from` (the next period's start).
+    *   **Push:** `PushTokenCreate`: `token`, `platform`, `tz_name`.
+    *   **Bounds:** checked in the models, so out-of-range input gets 422, never a 500 from date arithmetic or a database constraint.
     *   **Required fields:** response models have no default values, so that with `separate_input_output_schemas=False` every response field stays required in the generated TypeScript.
 
 #### 30. `services/api/src/socius_api/api/routers/check_ins.py` (Create)
 
 *   **Type / Scope:** Endpoints.
 *   **Proposed Changes:**
-    *   **`POST /v1/check-ins`:** applies the Check in rules from the request table.
+    *   **`POST /v1/check-ins`:**
+        *   Calls `ensure_current_period` for each of the caller's groups, sets `recorded_at` immediately before commit, and returns where it counted.
         *   **Retries:** a `client_request_id` matching one of the caller's own rows returns that row with 200, including a removed row. A match on another user's row gets 409 `request-conflict`.
-        *   **Duplicates:** a different request for a date that already has an active check-in gets `already-checked-in`.
-    *   **`DELETE /v1/check-ins/{local_date}`:** own active check-in only. Sets `removed_at`, and requires the week to be open.
+    *   **`DELETE /v1/check-ins/{id}`:** own active check-in only; every period containing its `recorded_at` must still be open; sets `removed_at`.
 
 #### 31. `services/api/src/socius_api/close.py` (Create)
 
 *   **Type / Scope:** The shared close function, used by both triggers.
 *   **Proposed Changes:**
-    *   **`close_group_week(session, group_id, week_start, clock) -> CloseOutcome`:** the five steps in "The close".
-        *   It returns `closed`, `already_closed` or `not_due`.
-        *   It commits its own transaction.
-    *   **`rescore_matches(session, group_id, week_start) -> bool`:** recomputes the week from current active facts with `recorded_before = cutoff`, and compares the result with `saved_member_results`.
+    *   **`close_period(session, period_id, clock) -> CloseOutcome`:** the five steps in "The close". It returns `closed`, `already_closed` or `not_due`, and commits its own transaction.
+    *   **`rescore_matches(session, period_id) -> bool`:** recomputes the period from current active facts, and compares the result with `saved_member_results`.
 
 #### 32. `services/api/src/socius_api/api/routers/groups.py` (Create)
 
-*   **Type / Scope:** Game endpoints. Creating groups, invites, removing and re-adding members are in spec 0001.
+*   **Type / Scope:** Game endpoints. Creating groups, the first start date, invites, removing, re-adding and promoting members are in spec 0001.
 *   **Proposed Changes:**
-    *   **`GET /v1/groups/{group_id}/weeks/{date}`:**
-        *   `date` may be any day of the week. The response carries the computed `week_start`, so the app does no week math.
-        *   **Open week:** live scores through `score_week`. Candidates aren't shown while the week is open.
-        *   **Closing** (between the cutoff and 5 minutes after it): live scores with `status: closing`, no candidates.
-        *   **Due but not closed:** calls `close_group_week` first, then reads the result. This is close on read.
-        *   **Closed week:** reads `week_results`.
-        *   **Access:** active members, plus removed members whose membership is in that week's member set.
-    *   **`PUT` / `DELETE /v1/groups/{group_id}/weeks/{date}/skip-token`:**
-        *   The caller's own token.
-        *   `PUT` returns `wasted` when the caller is already at N.
-        *   `DELETE` sets `removed_at`.
-    *   **`PUT` / `DELETE /v1/groups/{group_id}/weeks/{date}/excusals/{user_id}`:**
-        *   Admin only. The body carries `current_local_date`.
-        *   Applies the Excuse member and Revoke excusal rules from the request table.
-        *   An admin may excuse themselves. **[default]**
-    *   **`GET` / `PUT /v1/groups/{group_id}/settings`:**
-        *   `PUT` is admin only.
-        *   It writes a row for `next_effective_week(now)`, replacing a pending row for that week if one exists.
+    *   **`GET /v1/groups/{group_id}/periods/current` and `GET /v1/groups/{group_id}/periods/{seq}`:**
+        *   **Open:** live scores through `score_period`. Candidates aren't shown while the period is open.
+        *   **Closing** (between the end and 5 minutes after it): live scores with `status: closing`, no candidates.
+        *   **Due but not closed:** calls `close_period` first, then reads the result. This is close on read.
+        *   **Closed:** reads the saved result.
+        *   **Access:** active members, plus removed members whose membership is in that period's member set.
+        *   `current` calls `ensure_current_period`; before the first start date it returns 404 `not-found` with the start date in the problem detail.
+    *   **`PUT` / `DELETE /v1/groups/{group_id}/periods/{seq}/excusals/{user_id}`:** admin only. Applies the Excuse member and Revoke excusal rules from the request table. An admin may excuse themselves.
+    *   **`GET` / `PUT /v1/groups/{group_id}/settings`:** `PUT` is admin only, updates `group_settings`, and returns `applies_from`.
 
 #### 33. `services/api/src/socius_api/api/routers/me.py` (Create)
 
 *   **Type / Scope:** Endpoints.
 *   **Proposed Changes:**
     *   `GET /v1/me`, which a signed-in phone calls to confirm the whole sign-in path works. This is the Phase 0 exit check.
-    *   `POST /v1/push-tokens`, which upserts by token.
+    *   `POST /v1/push-tokens`, which upserts by token and updates `tz_name`.
 
 #### 34. `services/api/src/socius_api/api/routers/health.py` (Create)
 
@@ -1116,21 +1056,22 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 ### Part A, Stage 5: Scheduled job
 
-#### 37. `services/api/src/socius_api/jobs/close_weeks.py` (Create)
+#### 37. `services/api/src/socius_api/jobs/close_periods.py` (Create)
 
 *   **Type / Scope:** Scheduled close run.
 *   **Proposed Changes:**
-    *   **Entry point:** `run_close_weeks(session_factory, clock, push_sender, heartbeat) -> CloseRunReport`.
+    *   **Entry point:** `run_close_periods(session_factory, clock, push_sender, heartbeat) -> CloseRunReport`.
     *   **Steps:**
         1.  Insert a `job_runs` row.
-        2.  **Close due weeks:** for each due group-week, call `close_group_week`.
+        2.  **Extend:** call `ensure_current_period` for every started group.
+        3.  **Close due periods:** for each due period, call `close_period`.
             *   On an exception, record the group, increment `groups_failed`, report to Sentry and continue.
-            *   Report a due week older than the lookback as an error.
-        3.  **Check closed weeks:** for each group-week closed in the last 24 hours, call `rescore_matches`. Count mismatches, and report each one to Sentry.
-        4.  **Count overdue:** set `overdue` with `count_overdue`.
-        5.  **Send notifications:** up to 100 unsent outbox rows, through `push_sender`, outside any open transaction, with a 10-second HTTP timeout. Each sent row stores its Expo ticket ID. The payload is "Last week's results are in for <group>"; it never names the loser. Retries 429 and 5xx responses on a later run.
-        6.  **Check receipts:** for rows sent at least 15 minutes ago with no receipt yet, fetch Expo receipts (up to 1,000 IDs per request), and delete push tokens reported as `DeviceNotRegistered`.
-        7.  **Finish:** update the `job_runs` row.
+            *   Report an unclosed period older than the lookback as an error.
+        4.  **Check closed periods:** for each period closed in the last 24 hours, call `rescore_matches`. Count mismatches, and report each one to Sentry.
+        5.  **Count overdue:** set `overdue` with `count_overdue`.
+        6.  **Send notifications:** up to 100 unsent outbox rows, through `push_sender`, outside any open transaction, with a 10-second HTTP timeout. Each sent row stores its Expo ticket ID. The payload is "Results are in for <group>"; it never names the loser. Retries 429 and 5xx responses on a later run.
+        7.  **Check receipts:** for rows sent at least 15 minutes ago with no receipt yet, fetch Expo receipts (up to 1,000 IDs per request), and delete push tokens reported as `DeviceNotRegistered`.
+        8.  **Finish:** update the `job_runs` row.
             *   Call `heartbeat.success()` if `groups_failed = 0` and `overdue = 0`, otherwise `heartbeat.fail()`.
             *   A failed ping is logged and never raises.
 
@@ -1138,7 +1079,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** In-process scheduler (D2).
 *   **Proposed Changes:**
-    *   **Job:** an APScheduler `BackgroundScheduler` with one interval job, `close_weeks`, every 5 minutes, added with `next_run_time` set to now so it runs at startup. Other jobs (reminders, photo purge) are added by the specs that introduce them.
+    *   **Job:** an APScheduler `BackgroundScheduler` with one interval job, `close_periods`, every 5 minutes, added with `next_run_time` set to now so it runs at startup. Other jobs (reminders, photo purge) are added by the specs that introduce them.
     *   **Settings:** `max_instances=1`, `coalesce=True`, `misfire_grace_time=300`. `max_instances` applies per process, which is why the server runs one worker.
 
 #### 39. `services/api/src/socius_api/notifications/expo_push.py` and `services/api/src/socius_api/notifications/heartbeat.py` (Create)
@@ -1163,61 +1104,59 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   An app built with the fake clock and the scheduler off.
         *   An `auth_as(user)` helper that overrides the auth dependency, for API tests.
         *   A test JWKS and a helper that signs real test JWTs, for the Schemathesis run and the auth tests, so authentication itself is exercised.
-    *   **Data:** factories for users, groups, memberships and facts.
+    *   **Data:** factories for users, groups (with settings and a first start date), memberships and facts.
     *   **Fakes:** `PushSender` and `Heartbeat`.
 
-#### 41. `services/api/tests/api/test_check_ins.py`, `test_weeks.py`, `test_skip_tokens.py`, `test_excusals.py`, `test_settings.py`, `test_authz.py` (Create)
+#### 41. `services/api/tests/api/test_check_ins.py`, `test_periods.py`, `test_excusals.py`, `test_settings.py`, `test_authz.py` (Create)
 
 *   **Type / Scope:** API tests against real Postgres.
 *   **Proposed Changes:**
     *   **Request rules:** one test for each rule and error code in the request table.
+    *   **CUJ 1:** a check-in counts in two groups with different zones and period ends; the response lists both.
     *   **Retries:**
         *   A repeated `client_request_id` returns the same row.
         *   A retry after an undo doesn't create a new check-in.
-    *   **Cutoff:** the fake clock set just before and just after the cutoff.
-    *   **Excusal deadline:** `current_local_date` on Sunday is accepted; on Monday it is rejected with `excusal-window-closed`.
-    *   **Invariant 7:** a second check-in for the same date is rejected with `already-checked-in`, and scores don't change.
-    *   **Invariant 13 and removals:** a member removed on Wednesday keeps their state and points, can still lose, can still read that week, and gets its results notification.
-    *   **Missing rows:** undo, withdraw and revoke with nothing active return `not-found`.
-    *   **New groups:** a group created on Sunday 20:00 UTC by a member in UTC−5 has settings for the creator's current week, and that week closes normally.
-    *   **Closing window:** a GET at cutoff + 1 minute returns `status: closing` with no candidates.
-    *   **Settings:** a change made during the weekend overlap lands in `next_effective_week` and doesn't affect any open week.
-    *   **Close on read:** CUJ 5. A GET for a due week with no result closes it, and a second GET returns the same result.
-    *   **Request IDs:** another user's `client_request_id` gets `request-conflict`.
+        *   Another user's `client_request_id` gets `request-conflict`.
+    *   **Deadline:** with the fake clock just before and just after a period's end, for check-ins, undo, excusal and revoke.
+    *   **Invariant 11:** a settings change mid-period doesn't change the current period; the next period uses it.
+    *   **Invariant 12 and removals:** a member removed mid-period keeps their state and points, can still lose, can still read that period, and gets its results notification.
+    *   **Invariant 13:** undo of a check-in whose period has ended in any group is rejected with `period-closed`.
+    *   **Missing rows:** undo and revoke with nothing active return `not-found`.
+    *   **First period:** before the first start date, `current` returns `not-found`; members who join before it are eligible in the first period.
+    *   **Closing window:** a GET at end + 1 minute returns `status: closing` with no candidates.
+    *   **Close on read:** CUJ 5. A GET for a due period closes it and opens the next; a second GET returns the same result.
     *   **Privacy:**
         *   A non-member gets 404 `not-member` for every group endpoint.
-        *   No response contains `tz_name` or `utc_offset_minutes`.
+        *   No response contains a member's push-token zone.
     *   **Admin rules:** admin-only actions return 403 `not-admin` for members.
 
 #### 42. `services/api/tests/test_close.py` (Create)
 
 *   **Type / Scope:** Close tests, real Postgres, fake clock.
 *   **Proposed Changes:**
-    *   **CUJs:** CUJs 2 and 3, end to end.
+    *   **CUJ 2**, end to end, including the next period being opened.
     *   **Invariant 10:** reruns produce one result with the same loser (this item and item 43).
-    *   **Timing:** nothing closes before `cutoff + 5 min`.
-    *   **Reruns:** a second run changes nothing.
-    *   **Late writes:**
-        *   A fact with `recorded_at ≥ cutoff` is ignored.
-        *   A fact inserted after close with `recorded_at < cutoff` makes `rescore_matches` return false.
-        *   A late undo does the same.
+    *   **Timing:** nothing closes before end + 5 min.
+    *   **Catch-up:** after the scheduler is "asleep" for three periods, one run creates and closes all three in order.
+    *   **Late writes:** a check-in inserted after close with `recorded_at` inside the period makes `rescore_matches` return false.
     *   **Errors:** an error in one group doesn't block the others, and the heartbeat gets `fail()`.
-    *   **Overdue:** a due week left unclosed past `cutoff + 60 min` sets `overdue`, and the heartbeat gets `fail()`.
-    *   **Outbox:** one row per member, sent once, and marked sent.
+    *   **Overdue:** a due period left unclosed past end + 60 min sets `overdue`, and the heartbeat gets `fail()`.
+    *   **Outbox:** one row per member in the member set, sent once, and marked sent.
 
 #### 43. `services/api/tests/test_close_concurrency.py` (Create)
 
 *   **Type / Scope:** Concurrency tests (`@pytest.mark.concurrency`).
 *   **Proposed Changes:**
-    *   **Two schedulers at once:** two threads, each with its own connection, run `run_close_weeks` at the same moment. The result is one `week_results` row, one set of outbox rows and one loser.
-    *   **Scheduler and read at once:** one thread runs `run_close_weeks` while another sends the close-on-read GET. The GET waits for the lock and returns the saved result; one result, one set of outbox rows.
+    *   **Two schedulers at once:** two threads, each with its own connection, run `run_close_periods` at the same moment. The result is one saved result, one set of outbox rows, one next period and one loser.
+    *   **Scheduler and read at once:** one thread runs `run_close_periods` while another sends the close-on-read GET. The GET waits for the lock and returns the saved result.
+    *   **Concurrent `ensure_current_period`:** two callers at a period boundary create exactly one next period.
     *   **Crash recovery:** a close that raises mid-transaction doesn't block the next run, because the transaction lock is released.
     *   **Repetition:** each scenario runs 20 times, to catch races that only happen sometimes.
 
 #### 44. `services/api/tests/contract/test_schema_conformance.py` (Create)
 
 *   **Type / Scope:** Schemathesis.
-*   **Proposed Changes:** Runs Schemathesis's default checks against the in-process ASGI app, authenticated with a real test JWT signed by the test JWKS (not the dependency override, so the unauthenticated-request check holds). Checks include response bodies, status codes and content types against the schema. Where a schema-valid request is correctly rejected (for example `week-closed`), the expected statuses for that operation are configured explicitly.
+*   **Proposed Changes:** Runs Schemathesis's default checks against the in-process ASGI app, authenticated with a real test JWT signed by the test JWKS (not the dependency override, so the unauthenticated-request check holds). Checks include response bodies, status codes and content types against the schema. Where a schema-valid request is correctly rejected (for example `period-closed`), the expected statuses for that operation are configured explicitly.
 
 ### Part A, Stage 7: Generated client package
 
@@ -1231,9 +1170,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 #### 46. `packages/api-client/src/schema.d.ts` (Create, generated)
 
 *   **Type / Scope:** Generated types.
-*   **Proposed Changes:** Output of `just gen-client`.
-    *   It's committed so CI can diff it.
-    *   It's never edited by hand, and a header comment says so.
+*   **Proposed Changes:** Output of `just gen-client`. It's committed so CI can diff it, and it's never edited by hand; a header comment says so.
 
 #### 47. `packages/api-client/src/client.ts`, `errors.ts`, `index.ts` (Create)
 
@@ -1242,160 +1179,21 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **`client.ts`:** `createSociusClient({ baseUrl, getAccessToken })` returns an `openapi-fetch` client, with middleware that adds `Authorization: Bearer`.
     *   **`errors.ts`:** `SociusApiError` holds a `code` (the generated enum), `status` and `detail`. `toSociusApiError` parses problem-detail responses into it.
 
-### Part B, Stage 8: Documentation
+### Part B, Stage 8: Documentation (done)
 
-**Status: done (2026-11-11).** Items 48–64 were applied as described below, with these deviations:
+**Status: done (2026-11-11), then revised the same day for ADR-0011.** The PRD, HLD, CLAUDE.md and README summarize the game and link to this design instead of restating the rules; the ADR and spec templates were extended; ADRs 0001–0011 were written. Notes on how the PRD changed:
 
-| Plan says | What was done | Why |
-|---|---|---|
-| Item 48: FR-17 and FR-18, delete | Kept as "*(Removed: …)*" placeholders | Deleting them would renumber later requirements and break references |
-| Item 48: new requirement for specific error messages | Added as FR-15a | Keeps existing requirement numbers stable |
-| Item 51: README Development section | Added, with a note that the `just` commands work only once Part A, Stage 1 lands | The commands don't exist yet |
-| Item 50: CLAUDE.md "Current status" follows Parts A and B | Done; Stage 8 listed as complete | — |
-| Item 48: FR-11, delete | FR-11 kept and rewritten to the new acceptance rule (any day of the open week, up to the cutoff) | Same topic as before (when a check-in is accepted), so references to FR-11 stay meaningful |
-| Item 49: replace the HLD architecture diagram with a link | Kept a system-level diagram and added a link to the engine's diagram | The HLD diagram covers parts outside the engine (photo storage, signed uploads) |
-| Item 49: user, profile, photo and push-token tables stay in the HLD | `push_tokens` is defined in this design instead | The close sends notifications, so the engine owns the table |
+*   FR-17 and FR-18 (rest-day vote notifications) are kept as "*(Removed: …)*" placeholders, and a new requirement was added as FR-15a, so existing requirement numbers stay stable.
+*   The HLD keeps a system-level architecture diagram (it covers photo storage, which this design doesn't) and links to this design's Components diagram.
+*   `push_tokens` is defined in this design, because the close sends notifications.
 
-The rest of this stage is kept as the record of what changed.
-
-Rule for this stage: the PRD, HLD and CLAUDE.md **summarize and link** to this design for the game rules. They don't restate them.
-
-#### 48. `docs/product-requirements.md` (Modify)
-
-*   **Type / Scope:** Product requirements.
-*   **Proposed Changes:**
-    *   **"Overview" and "Prior art":**
-        *   Replace "lowest adherence" with "fewest check-ins against a shared weekly target".
-        *   Remove group-voted rest days from the differentiators. The new differentiator sentence is still to be written by the author.
-    *   **"Goals (v0.1)":**
-        *   G1 (form a group, set a shared schedule, check in) becomes "form a group, set a weekly target, check in".
-        *   G2 (fair scoring through adherence) becomes "the same target N for everyone".
-        *   G3 says "week" instead of "period".
-        *   Group size is set to 1–8 members **[default]**. A group of 1 never has a loser.
-    *   **"Glossary":**
-        *   Remove Schedule, Session, Rest day, Period and Adherence.
-        *   Add Week, Target N, Points, Eligible, Excused, Joined mid-week, Cutoff and Tie-break. Each is one line with a link to this design.
-        *   Owner (the member who created the group and edits settings) becomes Admin **[default]**.
-    *   **"Product requirements":**
-        *   **FR-5 (create a group with a schedule, period length, punishment and time zone):** becomes "create a group with a weekly target N and punishment text".
-        *   **FR-8 (members can leave; owner removes):** becomes "only an admin removes members", with a link to Decided Rules.
-        *   **FR-9 (a user may belong to more than one group; was open):** becomes "yes".
-        *   **FR-10 (check in once per session date):** becomes "once per local date".
-        *   **FR-11 (check-in window until 12:00 the next day):** delete.
-        *   **FR-13 (undo until the window closes):** becomes "undo while the week is open".
-        *   **FR-15 (a check-in counts in every group with a session that date):** becomes "counts in every group".
-        *   **FR-16 (reminder on session days):** becomes "reminder in the phone's current zone".
-        *   **FR-17 and FR-18 (rest-day vote notifications):** delete.
-        *   **FR-19 (period closed, results announced):** says "week". The notification doesn't name the loser.
-        *   **New:** every rejected action shows a specific message.
-    *   **"Schedule and scoring" and "Rest days and skip tokens":** replace both with a three-sentence summary of the game, and a link to this design's Decided Rules and loser rule.
-    *   **"Privacy and visibility" table:**
-        *   Remove the adherence and rest-vote rows.
-        *   Add: check-in zone and offset (private); excusal (visible, with who excused whom; reason not stored).
-    *   **"Roadmap":** v0.1 scope as in this design.
-    *   **"Risks":** link to this design's Risks & Mitigations.
-    *   **"Open questions":**
-        *   Remove Q1 (multiple groups), Q2 (members in different zones), Q4 (tie for last) and Q8 (anonymous votes); all are decided or obsolete.
-        *   Add Contributors (is a second person contributing) and Differentiator (the one-sentence pitch).
-    *   **Cleanup:** remove the duplicated photo-retention paragraph and the doubled `---` separators.
-
-#### 49. `docs/high-level-design.md` (Modify)
-
-*   **Type / Scope:** Technical design.
-*   **Proposed Changes:**
-    *   **"Architecture":** replace the diagram with a link to this design's Components. Remove "vote close".
-    *   **"Tech stack":** add `just`, APScheduler, openapi-typescript/openapi-fetch, Schemathesis, the error tracker and the monitors.
-    *   **"Time zones":** replace with two sentences and a link to this design's Time model.
-    *   **"Data model":**
-        *   The game-engine tables link to this design.
-        *   The user, profile, photo and push-token tables stay.
-    *   **"API sketch":**
-        *   The game endpoints link to this design's request rules.
-        *   The rest-proposal and vote endpoints are removed.
-    *   **"Background jobs":**
-        *   Remove `close_votes`.
-        *   `close_periods` becomes `close_weeks`, with a link to this design.
-    *   **"Quality strategy":**
-        *   Link to this design's Testing approach.
-        *   Remove "near-100% branch coverage".
-    *   **"Architecture Decision Records":** replace the table with a link to `docs/adr/`.
-    *   **"Repository layout":** add `justfile`, `pnpm-workspace.yaml`, `docker-compose.yml` and `docs/designs/`. Remove "votes" from `domain/`.
-
-#### 50. `CLAUDE.md` (Modify)
-
-*   **Type / Scope:** Assistant instructions.
-*   **Proposed Changes:**
-    *   **"Key product rules":**
-        *   Replace the scoring, rest-day and time-zone bullets with a link to this design's Decided Rules.
-        *   Keep the rules that never change: no money, food never scored, body data private, honor system.
-    *   **"What this is":** the summary paragraph says "fewest check-ins against a shared weekly target" instead of "adherence-based". The portfolio paragraph stays, pending the author's call.
-    *   **"Stack":** add `just`, APScheduler and openapi-typescript.
-    *   **"Current status":** the checklist follows Parts A and B of this plan.
-    *   **"How we work":**
-        *   Add: a design doc in `docs/designs/` covers work spanning several features; a spec covers one feature.
-        *   Remove "votes" from the domain list.
-    *   **"Unconfirmed defaults":** remove the items now decided:
-        *   check-in grace until noon
-        *   rest-day vote majority
-        *   one skip token
-        *   perfect week has no loser
-        *   max 8 members
-
-#### 51. `README.md` (Modify)
-
-*   **Type / Scope:** Project overview.
-*   **Proposed Changes:**
-    *   **"What it is":**
-        *   Remove "adherence" and "voted rest days".
-        *   State the game in one line.
-    *   **"Development":** a new section.
-        *   **Prerequisites:** Node LTS, pnpm via Corepack, uv, just, Docker.
-        *   **Commands:** `just setup`, `just db-up`, `just migrate`, `just dev`, `just test`.
-
-#### 52. `docs/adr/0000-template.md` (Modify)
-
-*   **Type / Scope:** ADR template.
-*   **Proposed Changes:** Add `Deciders`, `Supersedes` and `Superseded by` fields.
-
-#### 53. `docs/specs/0000-template.md` (Modify)
-
-*   **Type / Scope:** Spec template.
-*   **Proposed Changes:**
-    *   Add "Alternatives considered" and "Risks" sections.
-    *   Change the example references to sections of this design.
-
-#### 54–63. `docs/adr/0001-*.md` through `docs/adr/0010-*.md` (Create)
-
-*   **Type / Scope:** Architecture decision records, one page each, all Accepted except 0004.
-*   **Proposed Changes:**
-    *   **Layout:** each ADR states context, the options, the decision and its consequences.
-    *   **ADRs 0007–0010:** short records that link to this design for the full rules, instead of restating them.
-
-| ADR | File name | Status | Records |
-|---|---|---|---|
-| 0001 | `0001-docs-process.md` | Accepted | PRD, HLD, design docs, specs and ADRs, and when each is used. Covers the PRD/HLD split. |
-| 0002 | `0002-react-native-expo.md` | Accepted | React Native and Expo over native Swift. |
-| 0003 | `0003-fastapi-backend.md` | Accepted | A FastAPI backend; the app never touches the database; synchronous SQLAlchemy (D4). |
-| 0004 | `0004-supabase-auth.md` | Proposed | Supabase Auth and its JWT signing method; storage options. |
-| 0005 | `0005-build-tooling.md` | Accepted | pnpm + uv + just, Alternative U, and when to revisit. |
-| 0006 | `0006-api-contract.md` | Accepted | OpenAPI → openapi-typescript (D3), the client diff check, Schemathesis. |
-| 0007 | `0007-scoring-model.md` | Accepted | Shared N, points capped at N, `secrets.choice` tie-break; links to Decided Rules and Alternatives A–C, P. |
-| 0008 | `0008-time-model.md` | Accepted | Phone local date, Monday-keyed weeks, Monday 12:00 UTC cutoff; links to Time model and Alternatives D–F. |
-| 0009 | `0009-close.md` | Accepted | D1 with timeouts and rescore, D2 with close on read, facts not counters; links to The close. |
-| 0010 | `0010-testing-strategy.md` | Accepted | Invariant-based property tests, fake clock, real Postgres; links to Testing approach and Alternative V. |
-
-#### 64. `docs/designs/weekly-game-engine.md` (this document; Update)
-
-*   **Type / Scope:** This design.
-*   **Proposed Changes:**
-    *   This document already exists. It is updated in the same PR whenever implementation proves part of it wrong.
-    *   It serves as the spec for the game engine, so no separate spec is written for the same scope.
+When this design changes, the same PR updates those summaries.
 
 ### Part B, Stage 9: Mobile app
 
 These screens are useful only once spec 0001 (groups and invites) is built.
 
-#### 65. `apps/mobile/` Expo app scaffold (Create)
+#### 48. `apps/mobile/` Expo app scaffold (Create)
 
 *   **Type / Scope:** Expo app, created with the current `create-expo-app` TypeScript template, then trimmed.
 *   **Proposed Changes:**
@@ -1403,70 +1201,39 @@ These screens are useful only once spec 0001 (groups and invites) is built.
     *   **Libraries:** Expo Router, TanStack Query and the Supabase JS client.
     *   **SDK:** the Expo SDK version is pinned exactly in `apps/mobile/package.json` (see ADR-0002).
 
-#### 66. `apps/mobile/src/lib/localDate.ts` (Create)
-
-*   **Type / Scope:** Phone date utilities.
-*   **Proposed Changes:** `currentCheckInContext()` returns:
-    *   `localDate` as `YYYY-MM-DD`, from the device's local calendar
-    *   `tzName`, from `Intl.DateTimeFormat().resolvedOptions().timeZone`
-    *   `utcOffsetMinutes`
-    *   `capturedAt`, as ISO UTC
-
-    No week math: the app passes `localDate` to the week endpoint and uses the `week_start` and `cutoff` the API returns.
-
-#### 67. `apps/mobile/src/api/queryKeys.ts`, `apps/mobile/src/api/hooks.ts` (Create)
+#### 49. `apps/mobile/src/api/queryKeys.ts`, `apps/mobile/src/api/hooks.ts` (Create)
 
 *   **Type / Scope:** TanStack Query layer (D3).
 *   **Proposed Changes:**
-    *   **Query keys:** a single key factory, for example `keys.week(groupId, weekStart)` and `keys.settings(groupId)`.
-    *   **Read hooks:**
-        *   `useWeek(groupId, date)`.
-        *   `useSettings`.
+    *   **Query keys:** a single key factory, for example `keys.period(groupId, seq)`, `keys.currentPeriod(groupId)` and `keys.settings(groupId)`.
+    *   **Read hooks:** `useCurrentPeriod(groupId)`, `usePeriod(groupId, seq)`, `useSettings(groupId)`.
     *   **Write hooks:**
-        *   `useCheckIn` and `useUndoCheckIn` refresh the week for every group in `counted_in_group_ids`.
-        *   `useSkipToken`, `useExcuse` (sends `current_local_date`) and `useUpdateSettings`.
-    *   **Check-in retries:**
-        *   Each check-in gets a `client_request_id` when it's tapped.
-        *   An offline check-in is queued and retried with the same ID.
+        *   `useCheckIn` and `useUndoCheckIn` refresh the current period for every group in `counted_in`.
+        *   `useExcuse` and `useUpdateSettings`.
+    *   **Check-in retries:** each check-in gets a `client_request_id` when it's tapped. An offline check-in is queued and retried with the same ID; if a group's deadline passes before it syncs, the app says it will count in the next period.
 
-#### 68. `apps/mobile/src/api/messages.ts` (Create)
+#### 50. `apps/mobile/src/api/messages.ts` (Create)
 
 *   **Type / Scope:** Error code to message map.
 *   **Proposed Changes:**
-    *   **Messages:** one sentence per problem code. Examples:
-        *   `already-checked-in`: "You've already checked in today."
-        *   `excusal-window-closed`: "Excusals for this week closed at the end of Sunday."
+    *   **Messages:** one sentence per problem code, for example `period-closed`: "That period has already ended."
     *   **Type check:** the map is typed against the generated enum, so a new code fails type-checking until it has a message.
 
-#### 69. `apps/mobile/app/(tabs)/index.tsx`, `apps/mobile/app/group/[groupId]/index.tsx`, `apps/mobile/app/group/[groupId]/week/[date].tsx`, `apps/mobile/app/group/[groupId]/settings.tsx` (Create)
+#### 51. `apps/mobile/app/(tabs)/index.tsx`, `apps/mobile/app/group/[groupId]/index.tsx`, `apps/mobile/app/group/[groupId]/period/[seq].tsx`, `apps/mobile/app/group/[groupId]/settings.tsx` (Create)
 
 *   **Type / Scope:** Screens.
 *   **Proposed Changes:**
-    *   **Today:**
-        *   The check-in button.
-        *   Today's status for each group.
-    *   **Group:**
-        *   The live leaderboard for the week containing the phone's date: points out of N, plus badges for excused and joined mid-week.
-        *   A link to the previous week while it's still open.
-        *   The skip-token action, with a warning first when the token would be wasted.
-        *   Excuse buttons for admins.
-    *   **Week result:**
-        *   The final scores and the loser.
-        *   A "decided by tie-break" label.
-        *   Excusals, with who excused whom.
-        *   The punishment.
-    *   **Settings:**
-        *   Admin-only target N and punishment.
-        *   "Applies from Monday <date>", using `effective_week_start` from the response.
+    *   **Today:** the check-in button, and each group's points and deadline (in the member's local time, with a countdown).
+    *   **Group:** the live leaderboard for the current period: points out of N, badges for excused and joined mid-period, and excuse buttons for admins.
+    *   **Period result:** the final scores and the loser, a "decided by tie-break" label, excusals with who made them, and the punishment.
+    *   **Settings:** admin-only N, period length, time zone and punishment, with "applies from <date>" using `applies_from`.
     *   **Not included:** the suspense animation.
 
-#### 70. `apps/mobile/src/**/__tests__/*.test.tsx` (Create)
+#### 52. `apps/mobile/src/**/__tests__/*.test.tsx` (Create)
 
 *   **Type / Scope:** Jest and React Native Testing Library.
 *   **Proposed Changes:**
-    *   **Rendering:**
-        *   The leaderboard shows states and the cap.
-        *   The result screen labels a tie-break and lists excusals.
+    *   **Rendering:** the leaderboard shows states, the cap and the deadline in local time; the result screen labels a tie-break and lists excusals.
     *   **Messages:** every error code shows its message.
     *   **Retries:** a check-in retry reuses the request ID.
 
@@ -1479,15 +1246,13 @@ These screens are useful only once spec 0001 (groups and invites) is built.
     *   CI uses the Hypothesis `ci` profile.
 *   **Static analysis:** `just lint`.
 *   **Contract:** `just check-client` passes with no diff, and Schemathesis passes.
-*   **Coverage:**
-    *   Reported for `domain/` and `close.py`, but not enforced.
-    *   The gate is that every invariant and every CUJ has a named test. A checklist in the PR description maps each invariant number to its test.
+*   **Coverage:** reported for `domain/` and `close.py`, but not enforced. The gate is that every invariant and every CUJ has a named test; a checklist in the PR description maps each invariant number to its test.
 *   **Integration:**
-    *   **Local:** CUJs 1 and 4 as domain example tests (item 18); CUJs 2, 3 and 5 as API and close tests on Docker Postgres with the fake clock (items 41–42).
+    *   **Local:** CUJs 3 and 4 as domain example tests (item 18); CUJs 1, 2 and 5 as API and close tests on Docker Postgres with the fake clock (items 41–42).
     *   **Staging:**
-        1.  On a real iPhone dev build, check in and see the live leaderboard.
-        2.  Restart the API with `FAKE_NOW` past the cutoff, with the scheduler disabled.
-        3.  Open the week and see it closed on read.
+        1.  On a real iPhone dev build, check in and see the live leaderboard and the deadline in local time.
+        2.  Restart the API with `FAKE_NOW` past the period's end, with the scheduler disabled.
+        3.  Open the period and see it closed on read, and the next period opened.
         4.  Staging isn't always on (see Non-Functional Requirements, Cost), so these steps run against a staging service started for the test.
 *   **Operational:** in staging, check that the monitors alert:
     *   **Missing ping:** disable the heartbeat ping and confirm the monitor alerts within its window.
@@ -1502,12 +1267,8 @@ These screens are useful only once spec 0001 (groups and invites) is built.
 *   **Option B: async SQLAlchemy with psycopg 3 async (or asyncpg).**
     *   *How it works:* handlers and repositories are `async`, and the job runs on the event loop through APScheduler's `AsyncIOScheduler`.
     *   *Trade-offs:* one process handles many concurrent requests waiting on I/O.
-    *   *When it fails:*
-        *   Async SQLAlchemy forbids lazy-loading relationships, so a missed eager load is a runtime error.
-        *   Concurrency tests need several event loops or connections.
-        *   A single blocking call stalls every request.
+    *   *When it fails:* async SQLAlchemy forbids lazy-loading relationships, so a missed eager load is a runtime error; concurrency tests need several event loops or connections; a single blocking call stalls every request.
 *   **Option C: sync for the job, async for the API.**
     *   *How it works:* two session factories, with repository functions written twice or wrapped.
     *   *Trade-offs:* each side uses its natural style.
     *   *When it fails:* the two copies of the data-access code drift apart, so the close and live reads could compute scores from differently written queries.
-
