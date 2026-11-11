@@ -6,12 +6,12 @@
 
 ## What it is
 
-Socius is a cross-platform mobile app for small groups who already know each other. The group agrees on a weekly workout target, each check-in earns a point up to that target, and at the end of the week the member with the fewest points does the punishment the group agreed on. If everyone hits the target, nobody loses.
+Socius is a cross-platform mobile app for small groups who already know each other. The group's admin sets a period (a week, a month, any number of days) and a workout target. Each check-in earns a point up to that target, and when the period ends the member with the fewest points does the punishment the group agreed on. If everyone hits the target, nobody loses.
 
-- One shared weekly target; everyone trains on their own days
+- One shared target and deadline; everyone trains on their own schedule
 - One check-in counts in every group you're in
-- A weekly skip token, and admin excusals for sickness or travel
-- Results computed automatically every Monday, with a random tie-break
+- Admin excusals for sickness or travel
+- Results computed automatically at each deadline, with a random tie-break
 - Body and food data stay private; only check-ins and results are shared
 - No money. Punishments are social.
 
@@ -29,7 +29,7 @@ Socius is a cross-platform mobile app for small groups who already know each oth
 
 - [Product requirements](docs/product-requirements.md)
 - [High-level design](docs/high-level-design.md)
-- [Weekly game engine design](docs/designs/weekly-game-engine.md)
+- [Game engine design](docs/designs/game-engine.md)
 - [Architecture decision records](docs/adr/)
 - [Feature specs](docs/specs/)
 
