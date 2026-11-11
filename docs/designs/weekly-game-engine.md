@@ -2,14 +2,14 @@
 
 *   **Author:** Shreyas Vaid
 *   **Status:** Accepted
-*   **Review:** EGM design review stages 5 (zoom out), 6 (comprehension) and 7 (critic) were run and their findings resolved on 2026-11-11. Stages 8 (intermediate zoom out) and 9 (implementation readiness) were not run; run stage 9 before starting Part A if the plan changes significantly.
+*   **Review:** reviewed by fresh-context reviewers for scope, comprehension and design (findings resolved 2026-11-11), then for cross-document consistency and technical viability against current official documentation (findings resolved 2026-11-11). A dedicated implementation-readiness review of the plan has not been run.
 *   **Date:** 2026-11-11
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-Socius is an iOS and Android app for small groups who already know each other: couples, roommates, friends, families. The group agrees on a weekly training target. Each member checks in on the days they work out. When the week ends, the member with the fewest check-ins does the punishment the group agreed on. No money is involved, and check-ins are on the honor system.
+Socius is an iOS and Android app for small groups who already know each other: couples, roommates, friends, families. The group agrees on a weekly training target. Each member checks in on the days they work out. When the week ends, the member with the fewest points (check-ins plus a weekly skip token) does the punishment the group agreed on. No money is involved, and check-ins are on the honor system.
 
 This document designs two things:
 
@@ -49,7 +49,7 @@ A mistake in any of these produces a wrong loser. In a small group of friends, o
 ### Proposed solution (summary)
 
 *   **Check-ins.** A check-in is a single record per member per local date. It is stored once and never copied per group.
-*   **Scoring.** Each group's weekly score is computed from those records by a pure function (`score_week`), with no database or clock access. The function is given the week's saved settings: N, who is eligible, who is excused and who used a skip token.
+*   **Scoring.** Each group's weekly score is computed from those records by a pure function (`score_week`), with no database or clock access. The function is given the week's saved settings and facts: N, when each member joined, who is excused, their check-in dates and who used a skip token. It works out who is eligible.
 *   **Closing.** Every week closes at Monday 12:00 UTC, the moment Sunday has ended everywhere on Earth. Two triggers run the same close: a scheduled job, and the first read of a week's results after the cutoff. Closing can safely be rerun, and it saves the result, including the tie-break pick, in one transaction.
 *   **Foundation.** pnpm + uv + a root `justfile` for tooling. An OpenAPI-generated TypeScript client for the app. Tests built on written invariants checked by property-based tests, plus tests of the close against a real Postgres database with a fake clock.
 
@@ -63,7 +63,7 @@ A mistake in any of these produces a wrong loser. In a small group of friends, o
     *   Over a four-week trial with the test group (the first group of 4–5 people to use the app), no result is changed or computed by hand. A non-zero late-write mismatch count (see "Close protection") during the trial counts as a failure of this goal.
     *   The trial also needs groups and invites, which spec 0001 (groups and invites) covers, not this design.
 *   **G2. Rerunning gives the same answer.** Running the close any number of times, including two copies at once, produces the same stored result and the same loser. Tests check this against a real Postgres database.
-*   **G3. The rules are written down and tested.** Every scoring rule is stated as an invariant in this document. Each invariant has a property-based test, for example "points are always between 0 and N" or "an excused member never loses".
+*   **G3. The rules are written down and tested.** Every scoring rule is stated as an invariant in this document, and each invariant has a named test. Rules that are pure functions get property-based tests (for example "points are always between 0 and N"); rules that depend on the database get API or concurrency tests. The Testing approach section says which is which.
 *   **G4. One check-in counts everywhere.** A member in several groups checks in once per day. That check-in adds a point in every group they belong to, with no duplicate records.
 *   **G5. One command for each task.** `just dev`, `just test`, `just lint` and `just gen-client` work from a fresh clone after following the README. CI runs the same commands.
 *   **G6. CI detects drift between the app and the API.** The TypeScript client is generated from the API's OpenAPI schema. CI fails if the committed client is out of date, or if sampled API responses don't match the schema.
@@ -98,11 +98,11 @@ These are the game rules in force. Every other section refers here instead of re
 | **Undo** | <ul><li>A member can undo any of their own check-ins while its week is open.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
 | **Skip token** | <ul><li>One per member, per group, per week.</li><li>Adds 1 point, up to N.</li><li>Not tied to a day.</li><li>Can be withdrawn while the week is open.</li><li>The app warns before a token that would be wasted because the member is already at N.</li></ul> |
 | **Excusal** | <ul><li>Only an admin can excuse a member for a week, including themselves.</li><li>The request must be made while the admin's phone date is on or before Sunday of that week, and before the cutoff. The phone date is honor system.</li><li>An excused member can't lose that week.</li><li>The reason is never stored.</li><li>The group sees who was excused and by whom.</li><li>An excusal can be revoked under the same deadline.</li></ul> |
-| **Roles** | <ul><li>Two roles, `admin` and `member`. The PRD's earlier term "Owner" is replaced by `admin`.</li></ul> |
-| **Membership** | <ul><li>Members can't leave a group on their own; only an admin can remove a member.</li><li>A member removed during week W keeps their state for W and can still lose W.</li><li>Re-adding a member in the same week restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as a removal from every group.</li></ul> |
+| **Roles** | <ul><li>Two roles, `admin` and `member`. The PRD's earlier term "Owner" is replaced by `admin`.</li><li>A group can have more than one admin; the creator is the first. Promoting a member to admin and stepping down are defined in spec 0001. **[default]**</li></ul> |
+| **Membership** | <ul><li>Members can't leave a group on their own; only an admin can remove a member.</li><li>A member removed during week W keeps their state for W and can still lose W. They can still read the result of any week whose member set includes them, and they get that week's results notification. **[default]**</li><li>Re-adding a member in the same week restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as a removal from every group.</li></ul> |
 | **Group size** | At most 8 active members per group. Enforced when a member joins (spec 0001). |
 | **Joining** | <ul><li>The phone sends its local date when a member joins (`joined_local_date`, honor system).</li><li>A member who joins during week W can't lose W.</li><li>In that group, only their check-ins dated on or after `joined_local_date` count.</li></ul> |
-| **Settings changes** | <ul><li>A change to N or the punishment text takes effect from `week_start(latest_local_date(now)) + 7 days`. That is the first week that hasn't started anywhere on Earth.</li><li>A second change before then replaces the pending one.</li><li>A new group's first settings row takes effect from `week_start(latest_local_date(now))`.</li></ul> |
+| **Settings changes** | <ul><li>A change to N or the punishment text takes effect from `week_start(latest_local_date(now)) + 7 days`. That is the first week that hasn't started anywhere on Earth.</li><li>A second change before then replaces the pending one.</li><li>A new group's first settings row takes effect from `week_start(creator's joined_local_date)`, the week the creator joined in. This is the one case where a settings row covers a week that may already have begun somewhere, so the creator's first week always has settings. **[default]**</li></ul> |
 | **Loser** | See "Eligibility and the loser rule". |
 
 **Still open:**
@@ -170,7 +170,7 @@ These are the game rules in force. Every other section refers here instead of re
 *   **Then**:
     *   The API closes that group-week inline before responding. It uses the same close function as the scheduler.
     *   The member sees the final result.
-    *   The overdue check reports group F's week as late. The 13:00 UTC deadline in G7 had already passed, so the monitor alerts.
+    *   No scheduled run sent a success ping after the scheduler went quiet, so the heartbeat monitor had already alerted by 13:00 UTC (G7). The overdue count doesn't see this week, because it was closed on read before any run could count it.
 
 --------------------------------------------------------------------------------
 
@@ -245,6 +245,7 @@ The cost is that every leaderboard view recomputes scores. With at most 8 member
 *   **Week key.** A week is identified by the date of its Monday (`week_start`). A check-in belongs to the week `week_start = local_date − weekday(local_date)`. It doesn't use ISO week numbers, which mix years in late December.
 *   **Cutoff.** Week `W` closes at `W + 7 days, 12:00 UTC`: the following Monday at noon UTC. That's the moment Sunday ends in UTC−12, the last zone to finish a given date. Every group shares this cutoff. Nothing dated in week `W` can be created, undone or changed after it.
 *   **When a week begins.** Week `W` begins anywhere at `W 00:00` in UTC+14, which is Sunday 10:00 UTC. This instant decides which weeks a settings change may affect, and which weeks a removed member still belongs to.
+*   **The closing window.** Between `cutoff(W)` and `cutoff(W) + 5 minutes`, week `W` is `closing`: writes are rejected, the close hasn't run yet, and reads return live scores with `status: closing` and no candidates.
 *   **Two weeks open at once.** Weeks are keyed by their Monday, not by "the current period", so week `W` and week `W+1` can both accept check-ins during the weekend overlap. No special handling is needed.
 *   **Clock injection.** All code that needs the current time takes it from a `Clock` object passed in. Business logic never calls `datetime.now()` or uses Postgres `now()` or `DEFAULT now()`. The same fake clock is injected into both the API and the close in tests.
 *   **Clock skew.** Hosts use NTP. A few seconds of skew between processes is absorbed by the 5-minute close delay.
@@ -316,14 +317,17 @@ week_results        group_id, week_start, target_n, punishment_text,
 week_member_results group_id, week_start, user_id, state, check_in_days,
                     skip_token_used, points, is_loser
                     PK (group_id, week_start, user_id)
-push_tokens         id, user_id, token, platform, recorded_at
+push_tokens         id, user_id, token, platform, tz_name, recorded_at
                     PK (id); UNIQUE (token)
-notification_outbox id, user_id, kind, payload (jsonb), created_at, sent_at
+notification_outbox id, user_id, kind, payload (jsonb), created_at, sent_at,
+                    expo_ticket_id, receipt_checked_at
 job_runs            id, started_at, finished_at, weeks_closed,
                     groups_failed, overdue, mismatches, error
 ```
 
-*   **Timestamps.** Every fact table uses the same two columns: `recorded_at` (server time when the API wrote the row) and `removed_at` (set by undo, withdraw or revoke).
+*   **Timestamps.** The fact tables (`check_ins`, `skip_token_uses`, `excusals`) use the same two columns: `recorded_at` (server time when the API wrote the row) and `removed_at` (set by undo, withdraw or revoke). `memberships` uses `joined_at` and `removed_at`; `group_settings` rows are replaced while pending and never removed.
+*   **Partial unique indexes.** Each `UNIQUE … WHERE` above is a unique *index*, not a table constraint (SQLAlchemy: `Index(..., unique=True, postgresql_where=...)`). An `INSERT … ON CONFLICT` against one must repeat its `WHERE` predicate (SQLAlchemy: `index_where=`).
+*   **`push_tokens.tz_name`.** The phone's current time zone, updated when the app opens, used only to send reminders at the right local time. Private, like a check-in's zone.
 *   **Settings.** A week's settings are the `group_settings` row with the latest `effective_week_start ≤ W`. The settings are copied into `week_results` at close, so later edits never change history.
 *   **Check-ins.** They have no `group_id`. One row counts in every group whose member set for that week includes the member, subject to the joining rule.
 *   **Retries.** `client_request_id` stays unique on every row, including removed ones. A retried request, even one arriving after an undo, can't create a second check-in.
@@ -334,34 +338,35 @@ job_runs            id, started_at, finished_at, weeks_closed,
 
 Every write that touches week `W` first checks `clock.now() < cutoff(W)`, and rejects with `week-closed` otherwise. Each error is an RFC 9457 problem response with a stable `type` code the app maps to a message.
 
-**Every group endpoint** returns 404 `not-member` when the caller isn't an active member, so the response doesn't reveal that the group exists.
+**Every group endpoint** returns 404 `not-member` when the caller isn't an active member, so the response doesn't reveal that the group exists. One exception: a removed member can still `GET` any week whose member set includes them.
 
 | Action | Extra rules | Error codes |
 |---|---|---|
-| Check in | one active check-in per `local_date` per user; `local_date ≤ latest_local_date(now)` | `already-checked-in`, `date-not-accepted`, `week-closed` |
-| Undo check-in | own check-in only; sets `removed_at` | `week-closed` |
+| Check in | one active check-in per `local_date` per user; `local_date ≤ latest_local_date(now)`; a retried `client_request_id` must belong to the same user | `already-checked-in`, `date-not-accepted`, `request-conflict`, `week-closed` |
+| Undo check-in | own active check-in only; sets `removed_at` | `not-found`, `week-closed` |
 | Use skip token | one active token per member per group per week; the response says if it was wasted (already at N) | `token-already-used`, `week-closed` |
-| Withdraw skip token | own token only | `week-closed` |
+| Withdraw skip token | own active token only | `not-found`, `week-closed` |
 | Excuse member | <ul><li>admin only</li><li>target must be in W's member set</li><li>admin's phone date ≤ Sunday(W)</li></ul> | `not-admin`, `target-not-member`, `excusal-window-closed`, `week-closed` |
-| Revoke excusal | admin only; same deadline as excusing | `not-admin`, `excusal-window-closed`, `week-closed` |
+| Revoke excusal | admin only; an active excusal must exist; same deadline as excusing | `not-admin`, `not-found`, `excusal-window-closed`, `week-closed` |
 | Change target N or punishment text | admin only; N from 1 to 7; takes effect per Decided Rules | `not-admin`, `invalid-target` |
-| Join, remove, re-add member | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
+| Join, remove, re-add member; promote to admin, step down | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
 
 ### The close
 
 **One function, two triggers.** `close_group_week(session, group_id, week_start, clock)` closes one group-week:
 
-1.  It runs only if `now ≥ cutoff(W) + 5 minutes` and no result exists.
-2.  It takes `pg_try_advisory_xact_lock` on a key derived from `(group_id, week_start)`. If the lock isn't granted, another close is already running for this group-week, so it skips. A transaction lock is released automatically at commit or rollback, so a crash can't leave it held.
-3.  It loads the members, settings and facts for the week, and calls `score_week`. If several members are tied, it picks the loser with `secrets.choice`.
-4.  It inserts `week_results` and `week_member_results`, plus one `notification_outbox` row per member, then commits. If the result already exists, the insert fails on the primary key and the close skips. The primary key, not the lock, is what guarantees exactly one result.
+1.  It runs only if `now ≥ cutoff(W) + 5 minutes`.
+2.  It takes the blocking `pg_advisory_xact_lock` on a key derived from `(group_id, week_start)`. If another close holds it, this one waits (bounded by the transaction timeout) rather than giving up, so a close on read never returns empty-handed. There is one lock key per group-week, so no deadlock is possible. A transaction lock is released automatically at commit or rollback, so a crash can't leave it held.
+3.  With the lock held, it checks again whether a result exists. If one does, it returns `already_closed`.
+4.  It loads the members, settings and facts for the week, and calls `score_week`. If several members are tied, it picks the loser with `secrets.choice`.
+5.  It inserts `week_results` with `INSERT … ON CONFLICT DO NOTHING RETURNING`, then `week_member_results` and one `notification_outbox` row per member in the member set (including members removed during the week), then commits. A conflict returns no row instead of aborting the transaction, so the caller's session stays usable. The primary key, not the lock, is what guarantees exactly one result.
 
 The two triggers:
 
 *   **Scheduled (D2).**
     *   APScheduler inside the FastAPI process runs `close_weeks` every 5 minutes.
     *   `close_weeks` calls `close_group_week` for every due group-week from the last 8 weeks. A due week older than 8 weeks is reported as an error, not closed.
-    *   Then it sends up to 100 unsent outbox rows through Expo Push and marks them sent.
+    *   Then it sends up to 100 unsent outbox rows through Expo Push (Expo's per-request limit) and marks them sent, storing each push ticket ID. It also fetches receipts for tickets sent at least 15 minutes earlier and deletes push tokens Expo reports as `DeviceNotRegistered`.
 *   **On read (D2 addition).** `GET` for a week that is due but has no result calls `close_group_week` for that one group-week before responding. Results are then correct whenever someone looks; only notification timing depends on the scheduler.
 
 **Each scheduled run also:**
@@ -374,19 +379,21 @@ The two triggers:
 
 **Delivery.** Notifications are delivered **at least once**. A crash after Expo accepts a push but before `sent_at` is written can resend it.
 
-**Keeping the API awake.** Free hosting tiers put idle processes to sleep, and a sleeping process runs no scheduled jobs. The uptime monitor keeps it awake, and close on read covers the gaps.
+**Single process.** The API runs with one uvicorn worker, so there is one scheduler. More workers would each start their own; results would stay correct, but every run would be duplicated. The scheduler's first run happens at startup, not 5 minutes later, so a process that just woke up closes due weeks immediately.
 
-**Before choosing a host,** check two things:
+**Keeping the API awake.** Free hosting puts idle processes to sleep, and a sleeping process runs no scheduled jobs. The uptime monitor keeps it awake, and close on read covers the gaps. Current free options (checked 2026-11-11; re-check before deploying):
 
-*   that it allows keep-alive pings
-*   that one always-on service fits in its free monthly hours
+*   **Render** has a free web-service tier: services sleep after 15 minutes without inbound traffic, and a workspace gets 750 instance hours a month, enough for one always-on service but not a second one such as staging. Its documentation doesn't address keep-alive pings, and warns that unusual traffic patterns on free services may lead to suspension. Render's free Postgres expires after 30 days, so the database must be hosted elsewhere (for example Supabase or Neon).
+*   **Fly.io** has no free tier for new organizations; monthly bills under $5 are waived, which requires a card on file.
+*   **Railway** offers a 30-day trial, then $1 of credit a month, which doesn't keep a service running all month.
 
-If not, the fallback is a paid plan that never sleeps, which needs the author's approval because it costs money.
+The plan is Render's free tier with the uptime ping. The fallback is a small always-on machine (for example on Fly.io, likely billed under $5 and waived), which needs the author's approval because it requires a card and may cost money.
 
 **Close protection (D1, decided: time check plus delay, with bounded transactions and rescore detection):**
 
 *   **Rejecting late writes.** Every write for week `W` is rejected once `clock.now() ≥ cutoff(W)`.
-*   **Bounding the race.** The API's database connections set `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 30s`. Any write transaction that started before the cutoff therefore commits or aborts within about 30 seconds, well inside the 5-minute close delay.
+*   **Checking twice.** The cutoff is checked when the request starts and again immediately before commit, so time spent waiting for a database connection or a thread can't carry a write past the cutoff.
+*   **Bounding the race.** The database role the API uses has `transaction_timeout = 30s` (PostgreSQL 17 or later), `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 30s`, set with `ALTER ROLE` so they apply through any connection pooler. A write transaction that passed the pre-commit check therefore commits or is cut off within 30 seconds, well inside the 5-minute close delay. (`statement_timeout` alone limits each statement, not the transaction, which is why `transaction_timeout` is needed.) Because `idle_in_transaction_session_timeout` ends the whole connection, the pool uses `pool_pre_ping` to discard dead connections.
 *   **What the close reads.** Facts with `recorded_at < cutoff(W)` that are active (`removed_at` is null) at the time of the close.
 *   **Detecting what slips through.** Each scheduled run rescores every group-week closed in the previous 24 hours from the current facts, using the same filter, and compares the result with the saved `week_member_results`.
     *   A difference means a write or undo committed after the close.
@@ -395,25 +402,25 @@ If not, the fallback is a paid plan that never sleeps, which needs the author's 
 
 ### Tooling and contract
 
-*   **Repo.** A pnpm workspace with `apps/mobile` and `packages/api-client`, and a uv project at `services/api`. A root `justfile` has `dev`, `test`, `lint`, `fmt`, `typecheck`, `gen-client`, `db-up` and `migrate`. CI installs `just` and calls those same recipes.
+*   **Repo.** A pnpm workspace with `apps/mobile` and `packages/api-client`, and a uv project at `services/api`. A root `justfile` has one recipe per task (full list in plan item 4). CI installs `just` and calls the same recipes.
 *   **Contract (D3, decided).**
     *   `just gen-client` exports the OpenAPI schema from FastAPI without starting a server. It then runs `openapi-typescript` to write `packages/api-client/src/schema.d.ts`.
     *   The package exports a typed `openapi-fetch` client that attaches the Supabase JWT to every request and turns problem-detail errors into one typed error.
     *   TanStack Query hooks are written by hand in `apps/mobile/src/api/`. Wrong cache keys and missed invalidations are the main drift risk for hand-written hooks, so one key-factory module keeps them in one place.
     *   CI regenerates the client and fails if anything differs from what's committed.
-    *   Separately, Schemathesis generates requests from the schema against a test instance of the API. It fails if responses or status codes don't match the schema.
+    *   Separately, Schemathesis generates requests from the schema against a test instance of the API. It fails if responses, status codes or content types don't match the schema, so every route declares its error responses (one `Problem` model under `application/problem+json`).
 
 ### Testing approach
 
 | Layer | What it proves | How |
 |---|---|---|
-| `domain/` scoring, eligibility, week math | The rules in this document hold for all inputs | Hypothesis property tests against the invariants below, plus example tests for each CUJ |
-| API | Request rules, permissions, error codes, retries that are safe to repeat, close on read | pytest + httpx against real Postgres (Docker locally, a CI service container), fake clock |
-| Close | Same result on every rerun, including concurrent runs; late writes detected | Real Postgres, fake clock, two separate database connections for the concurrency tests |
+| `domain/` scoring, eligibility, week math | The pure rules hold for all inputs | Hypothesis property tests for invariants 1–6, 8, 9, 11 and 12, plus example tests for CUJs 1 and 4 |
+| API | Request rules, permissions, error codes, retries that are safe to repeat, close on read; invariants 7 and 13; CUJ 5 | pytest + httpx against real Postgres (Docker locally, a CI service container), fake clock; example tests (Hypothesis doesn't fit a per-test database fixture) |
+| Close | Invariant 10; late writes detected; CUJs 2 and 3 | Real Postgres, fake clock, two separate database connections for the concurrency tests |
 | Contract | The app client matches the API, and the API matches its schema | Client diff check + Schemathesis |
 | Mobile | Screens render scores, errors map to messages | Jest + React Native Testing Library |
 
-The goal is not a coverage percentage. Every invariant below has a property test, and every CUJ has an example test.
+The goal is not a coverage percentage. Every invariant below has a named test of the type the table gives, and every CUJ has an example test.
 
 **Invariants:**
 
@@ -427,7 +434,7 @@ The goal is not a coverage percentage. Every invariant below has a property test
 8.  `week_start(d)` is a Monday, `week_start(d) ≤ d`, and `d − week_start(d) < 7 days`.
 9.  For every UTC offset from −12:00 to +14:00, Sunday 23:59:59 local time is before `cutoff(W)`.
 10. Running the close any number of times, through either trigger and including concurrently, leaves exactly one result per group-week, with the same loser.
-11. A settings write never changes the settings of a week that has begun anywhere.
+11. A settings change never changes the settings of a week that has begun anywhere. (A new group's first settings row is the one exception; see Decided Rules.)
 12. Check-ins dated before a member's `joined_local_date` never change that member's points in that group.
 13. Removing a member during week W doesn't change their state or points for W.
 
@@ -657,7 +664,7 @@ The goal is not a coverage percentage. Every invariant below has a property test
     *   Nothing is deployed yet, so there is no data to migrate. The first Alembic migration creates the schema in this document.
     *   A change to the scoring rules increments `scoring_version`. Results already saved are never recomputed.
 *   **Cost.**
-    *   Everything runs on free tiers: one API service, managed Postgres, Supabase Auth, Expo Push, an error tracker, an uptime monitor and a heartbeat monitor.
+    *   Everything runs on free tiers: one API service (Render), managed Postgres hosted separately (Render's free Postgres expires after 30 days), Supabase Auth, Expo Push, an error tracker, an uptime monitor and a heartbeat monitor. A free tier covers one always-on service, so there is no always-on staging environment for free.
     *   Moving to a paid plan needs the author's approval.
 
 --------------------------------------------------------------------------------
@@ -666,9 +673,10 @@ The goal is not a coverage percentage. Every invariant below has a property test
 
 | Risk | Impact | Mitigation | Detection |
 |---|---|---|---|
-| The host refuses keep-alive pings, or one always-on service exceeds its free hours | Notifications late; results still correct (close on read) | Verify before choosing a host; fallback to a paid always-on plan with the author's approval | Heartbeat failure signal; overdue count |
+| The host suspends or sleeps the free service despite the keep-alive ping | Notifications late; results still correct (close on read) | Render free tier with one service; fallback to a small always-on machine with the author's approval | Heartbeat failure signal; overdue count |
 | One process carries web traffic and the close | A slow close delays requests, or a crash stops both | The close is short (one transaction per group-week); close on read covers scheduler gaps | Error tracker; heartbeat |
-| Free-tier Postgres pauses, expires or loses data | Closed results can't be rebuilt without facts | Choose a plan with backups; export before any free-tier expiry | Host notifications; failed health of close runs |
+| Free-tier Postgres pauses, expires or loses data | Closed results can't be rebuilt without facts | Don't use Render's free Postgres (expires after 30 days); choose a host with backups; export regularly | Host notifications; failed close runs |
+| A free Supabase project pauses after inactivity | Nobody can sign in until it is resumed | Verify Supabase's current pause policy; keep the project active or move to a paid plan with the author's approval | Error tracker (401 spike); Supabase email |
 | Supabase Auth outage | Nobody can sign in or call the API | None in v0.1; accepted | Error tracker (401 spike) |
 | Expo Push outage | Results notifications late or lost | Outbox keeps unsent rows; delivery is at least once | `notification_outbox` rows with no `sent_at` |
 | Clock skew between processes | A write accepted or rejected a few seconds early or late | NTP on hosts; 5-minute close delay | None needed at this tolerance |
@@ -699,7 +707,7 @@ The plan has two parts.
 *   **Part A (the engine):** everything needed to build and test the game engine without a phone. It also includes the scaffold, CI and the generated client that the contract check needs.
 *   **Part B (follow-ups):** the documentation rewrites (Stage 8, done) and the mobile app (Stage 9). Part B's screens need spec 0001 (groups and invites) to be useful.
 
-Each stage is one or more small PRs with green CI, and each stage depends on the ones before it. Items marked **[default]** were proposed defaults, approved by the author with this plan. Database access is synchronous (Decision D4, at the end of this section).
+Each stage is one or more small PRs with green CI, and each stage depends on the ones before it, with one exception: the Expo scaffold (item 65) may be pulled forward so the Phase 0 sign-in check can run on a real phone. Items marked **[default]** were proposed defaults. Those in the original plan were approved by the author; three added after the consistency review (several admins, removed members' access to their weeks, a new group's first settings row) are listed as unconfirmed in CLAUDE.md until the author confirms them. Database access is synchronous (Decision D4, at the end of this section).
 
 ### Part A, Stage 1: Repository scaffold and CI
 
@@ -717,12 +725,12 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Workspace definition.
 *   **Proposed Changes:** Packages `apps/*` and `packages/*`.
 
-#### 3. `.npmrc` (Create)
+#### 3. pnpm settings in `pnpm-workspace.yaml` (Modify item 2)
 
 *   **Type / Scope:** pnpm configuration.
 *   **Proposed Changes:**
-    *   **Linker:** set `node-linker=hoisted` only if the pinned Expo SDK's monorepo guide still requires it. Check this while scaffolding, and explain the result in a comment in `.npmrc`.
-    *   **Peer dependencies:** set `strict-peer-dependencies=false` only if Expo's peer dependencies require it.
+    *   **Linker:** use pnpm's default isolated install. Expo supports it from SDK 54 (Expo monorepo guide). Only if a library breaks under it, add `nodeLinker: hoisted` to `pnpm-workspace.yaml` with a comment naming the library.
+    *   **Peer dependencies:** relax strict peer dependencies only if Expo's peer dependencies require it, with a comment saying why.
 
 #### 4. `justfile` (Create)
 
@@ -748,16 +756,16 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 #### 5. `.gitignore` (Modify)
 
 *   **Type / Scope:** Ignore rules.
-*   **Proposed Changes:** Add `.venv/`, `node_modules/`, `.expo/`, `.pytest_cache/`, `.hypothesis/`, `*.env` (but not `.env.example`) and `services/api/openapi.json`.
+*   **Proposed Changes:** The existing `.gitignore` already covers `.venv/`, `node_modules/`, `.expo/`, `.pytest_cache/`, `.hypothesis/` and `.env*` (except `.env.example`). Add `services/api/openapi.json`.
 
 #### 6. `.env.example` (Create)
 
 *   **Type / Scope:** Documented environment variables.
 *   **Proposed Changes:**
     *   **Database:** `DATABASE_URL`, `DB_POOL_SIZE`.
-    *   **Auth:** `SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `SUPABASE_JWKS_URL`.
+    *   **Auth:** `SUPABASE_URL`, `SUPABASE_JWKS_URL` (`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`), `SUPABASE_JWT_ISSUER` (`<SUPABASE_URL>/auth/v1`), `SUPABASE_JWT_AUDIENCE`. See ADR-0004.
     *   **Monitoring:** `SENTRY_DSN`, `CRON_HEARTBEAT_URL`, plus the monitor's failure URL, `CRON_HEARTBEAT_FAIL_URL`.
-    *   **Push:** `EXPO_ACCESS_TOKEN`.
+    *   **Push:** `EXPO_ACCESS_TOKEN`, needed only if Expo's enhanced push security is turned on.
     *   **Jobs:** `SCHEDULER_ENABLED`, which defaults to `true` and is set to `false` in tests.
     *   **Environment:**
         *   `APP_ENV` (`local`, `test`, `staging` or `production`).
@@ -768,13 +776,13 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Local Postgres.
 *   **Proposed Changes:**
-    *   **Main database:** a `postgres:16` service with a named volume, a health check and port 5432.
-    *   **Test database:** `socius_test`, created by an init script for the test suite.
+    *   **Main database:** a `postgres:17` service with a named volume, a health check and port 5432. Version 17 is required for `transaction_timeout`.
+    *   **Test database:** `socius_test`, created by an init script for the test suite. Init scripts run only when the volume is first created; `just db-reset` recreates it.
 
 #### 8. `docker/postgres-init/01-create-test-db.sql` (Create)
 
 *   **Type / Scope:** Postgres init script.
-*   **Proposed Changes:** Creates `socius_test`.
+*   **Proposed Changes:** Creates `socius_test`, and creates the application role with the timeouts from "Close protection" (`ALTER ROLE … SET transaction_timeout = '30s'`, and the same for the other two). Used locally only; CI does the same in a workflow step.
 
 #### 9. `.github/workflows/ci.yml` (Create)
 
@@ -782,7 +790,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Proposed Changes:**
     *   **Triggers:** pull requests and pushes to `main`.
     *   **Services and tools:**
-        *   A `postgres:16` service container.
+        *   A `postgres:17` service container with `POSTGRES_DB: socius_test`. Service containers start before the repo is checked out, so the init script can't be mounted; a workflow step creates the role and sets its timeouts instead.
         *   `actions/setup-node`, pnpm through Corepack, `astral-sh/setup-uv` and `extractions/setup-just` (or the equivalent).
         *   uv and pnpm caches.
     *   **Steps:** `just setup`, `just lint`, `just typecheck`, `just migrate` against the test database, `just test` and `just check-client`.
@@ -803,7 +811,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   fastapi, uvicorn[standard], pydantic v2, pydantic-settings
         *   sqlalchemy 2.x, alembic, psycopg[binary] 3.x
         *   pyjwt[crypto] for verifying Supabase JWTs
-        *   apscheduler 3.x (the stable line, not the 4.0 pre-releases)
+        *   apscheduler 3.x (the stable line; 4.0 is still pre-release). It ships no type information, so it is used from one small wrapper module (`jobs/scheduler.py`) with a narrow pyright suppression.
+        *   tzdata, so time zone validation works on slim Docker images without system zone data
         *   sentry-sdk, httpx
     *   **Dev dependencies:** pytest, hypothesis, schemathesis, ruff, pyright.
     *   **Tool settings:**
@@ -826,7 +835,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `is_open(week_start, now: datetime) -> bool`
         *   `latest_local_date(now) -> date`: the date at UTC+14.
         *   `next_effective_week(now) -> date`: `week_start(latest_local_date(now)) + 7 days`.
-    *   **Validation:** each function raises `ValueError` if `week_start` isn't a Monday.
+    *   **Validation:** each function that takes a `week_start` raises `ValueError` if it isn't a Monday.
 
 #### 13. `services/api/src/socius_api/domain/scoring.py` (Create)
 
@@ -870,7 +879,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Property and example tests.
 *   **Proposed Changes:**
-    *   **Properties:** invariants 8, 9 and 11. For 11: `next_effective_week(now)` is always later than every week that has begun anywhere at `now`.
+    *   **Properties:** invariants 8, 9 and 11. For 11: `next_effective_week(now)` is always later than every week that has begun anywhere at `now`. A new group's first settings row is covered by an example in item 41.
     *   **Examples:**
         *   the year boundary (2026-12-31 and 2027-01-01)
         *   leap day
@@ -882,7 +891,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Property tests.
 *   **Proposed Changes:**
-    *   **Invariants:** 1–7, 12 and 13, one test function each, named after the invariant.
+    *   **Invariants:** 1–6 and 12, one test function each, named after the invariant. (Invariants 7 and 13 depend on the database and are tested in item 41; invariant 10 in items 42–43.)
     *   **Tie-break:** `pick_loser` always returns a member of the candidates. Over 1,000 calls with `secrets.choice`, every candidate in a set of 2–8 is picked at least once.
 
 #### 18. `services/api/tests/domain/test_scoring_examples.py` (Create)
@@ -892,7 +901,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **CUJs:** one test each for CUJs 1–4, with their exact numbers.
     *   **Small groups:** a solo group; a couple where one member is excused.
     *   **Ties:** everyone at 0, which needs a tie-break among everyone.
-    *   **Joiners and removals:** a joiner whose earlier check-ins are ignored; a member removed on Wednesday who still loses.
+    *   **Joiners:** a joiner whose earlier check-ins are ignored. (A member removed on Wednesday who still loses is an API test in item 41, because removal is a database concept.)
     *   **Other cases:** N = 1 with a skip token; a check-in outside the week, which is ignored.
 
 #### 19. `services/api/tests/domain/test_purity.py` (Create)
@@ -938,8 +947,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Engine and session factory.
 *   **Proposed Changes:**
     *   **Engine:** synchronous (D4). One `Engine` from `create_engine(DATABASE_URL)` with psycopg 3, and a `sessionmaker`.
-    *   **Timeouts:** connect arguments set `options="-c statement_timeout=30000 -c idle_in_transaction_session_timeout=30000"`. That is the 30-second bound in "Close protection".
-    *   **Pool:** size `DB_POOL_SIZE` (default 5), with an overflow of 5, to fit free-tier connection limits.
+    *   **Timeouts:** set on the database role, not the connection string (see "Close protection"), because connection poolers such as Supabase's ignore per-connection startup options. If the host's URL is a transaction-mode pooler, psycopg 3 also needs `prepare_threshold=None`; record which mode the host uses in ADR-0004.
+    *   **Pool:** size `DB_POOL_SIZE` (default 5), with an overflow of 5, to fit free-tier connection limits. `pool_pre_ping=True` discards connections the database closed. `pool_timeout=5` seconds; a request that can't get a connection in time gets 503 instead of queuing for 30 seconds.
     *   **Sessions:** a session-per-request dependency for FastAPI, and the same factory for the scheduler.
     *   **Route handlers:** plain `def` functions, which FastAPI runs in its thread pool.
 
@@ -953,8 +962,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `settings_for_week(session, group_id, week_start)`.
     *   **Close:**
         *   `due_group_weeks(session, now, lookback_weeks=8) -> list[(group_id, week_start)]`. It covers groups whose member set for the week isn't empty.
-        *   `try_lock_group_week(session, group_id, week_start) -> bool`. It calls `pg_try_advisory_xact_lock(hashtextextended(group_id::text || week_start::text, 0))`.
-        *   `insert_week_result(...)`. It raises `AlreadyClosed` on a primary-key conflict.
+        *   `lock_group_week(session, group_id, week_start)`. It calls the blocking `pg_advisory_xact_lock(hashtextextended(group_id::text || week_start::text, 0))`. `hashtextextended` (PostgreSQL 11+) gives a 64-bit key; a collision only makes two closes wait for each other.
+        *   `insert_week_result(...) -> bool`. It uses `INSERT … ON CONFLICT DO NOTHING RETURNING` and returns false if a result already existed.
         *   `recently_closed(session, now, hours=24)`.
         *   `saved_member_results(session, group_id, week_start)`.
         *   `count_overdue(session, now, lookback_weeks=8)`.
@@ -985,19 +994,20 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Authentication dependency.
 *   **Proposed Changes:**
     *   **Verification:**
-        *   Verifies the Supabase JWT signature, audience and expiry.
+        *   Verifies the Supabase JWT with PyJWT's `PyJWKClient` against the project's JWKS, allowing algorithms `ES256` and `RS256`, and checks signature, issuer, audience and expiry. The JWKS is cached for at most 10 minutes, as Supabase recommends.
         *   Maps the token's `sub` to a `users` row, creating it on first sight.
         *   Returns `CurrentUser`.
     *   **Errors:** a missing or invalid token gives 401 `unauthenticated`.
-    *   **To check during implementation:** the exact Supabase signing method (JWKS with asymmetric keys, or a shared secret), against current Supabase docs. Recorded in ADR-0004.
+    *   **Before accepting ADR-0004:** confirm in the Supabase dashboard that the project uses asymmetric signing keys. The JWKS endpoint returns no keys for a project still on the legacy shared secret.
 
 #### 28. `services/api/src/socius_api/errors.py` (Create)
 
 *   **Type / Scope:** RFC 9457 problem details.
 *   **Proposed Changes:**
     *   **Error type:** `ProblemError(code, status, detail)`.
-    *   **Handler:** an exception handler that returns `application/problem+json` with `type: "https://socius.app/problems/<code>"`.
-    *   **Codes:** a string enum, so they appear in the OpenAPI schema and the generated TypeScript types:
+    *   **Handler:** an exception handler that returns `application/problem+json` with `type: "https://socius.app/problems/<code>"`. Request validation errors also become problem responses (code `invalid-request`, 422), and the OpenAPI schema's default 422 entry is replaced to match.
+    *   **Schema:** one `Problem` response model, whose `code` field is the enum below. Every route declares its possible error statuses with `responses=` under `application/problem+json`, so the codes appear in the generated TypeScript and Schemathesis sees every status as documented.
+    *   **Codes:**
         *   `already-checked-in`
         *   `week-closed`
         *   `date-not-accepted`
@@ -1008,6 +1018,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `excusal-window-closed`
         *   `invalid-target`
         *   `group-full`
+        *   `not-found`
+        *   `request-conflict`
+        *   `invalid-request`
         *   `unauthenticated`
 
 #### 29. `services/api/src/socius_api/api/schemas.py` (Create)
@@ -1015,13 +1028,13 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Pydantic request and response models.
 *   **Proposed Changes:**
     *   **Check-ins:**
-        *   `CheckInCreate`: `local_date`, `tz_name` (validated against `zoneinfo.available_timezones()`), `utc_offset_minutes`, `captured_at`, `client_request_id`.
+        *   `CheckInCreate`: `local_date` (2000-01-01 to 2100-12-31), `tz_name` (checked against `zoneinfo.available_timezones()`, computed once at startup), `utc_offset_minutes` (−720 to 840), `captured_at`, `client_request_id`. Bounds are checked in the model so out-of-range input gets 422, never a 500 from date arithmetic or a database constraint.
         *   `CheckInOut`: `local_date`, `week_start`, `cutoff`, `counted_in_group_ids`.
     *   **Weeks:**
         *   `MemberScoreOut`: `user_id`, `display_name`, `state`, `points`, `check_in_days`, `skip_token_used`, `is_loser`.
         *   `WeekOut`:
             *   `group_id`, `week_start`, `cutoff`
-            *   `status`: `open` or `closed`
+            *   `status`: `open`, `closing` or `closed`
             *   `target_n`, `punishment_text`, `members`
             *   `has_loser`, `loser_user_id`, `was_tiebreak`
             *   `excusals`, a list of `{user_id, excused_by, recorded_at}`
@@ -1030,13 +1043,14 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **Settings:** `SettingsUpdate` and `SettingsOut`: `target_n`, `punishment_text`, `effective_week_start`.
     *   **Push:** `PushTokenCreate`.
     *   **Privacy:** `tz_name` and `utc_offset_minutes` appear in no response.
+    *   **Required fields:** response models have no default values, so that with `separate_input_output_schemas=False` every response field stays required in the generated TypeScript.
 
 #### 30. `services/api/src/socius_api/api/routers/check_ins.py` (Create)
 
 *   **Type / Scope:** Endpoints.
 *   **Proposed Changes:**
     *   **`POST /v1/check-ins`:** applies the Check in rules from the request table.
-        *   **Retries:** a matching `client_request_id` returns the existing row with 200, including a removed row.
+        *   **Retries:** a `client_request_id` matching one of the caller's own rows returns that row with 200, including a removed row. A match on another user's row gets 409 `request-conflict`.
         *   **Duplicates:** a different request for a date that already has an active check-in gets `already-checked-in`.
     *   **`DELETE /v1/check-ins/{local_date}`:** own active check-in only. Sets `removed_at`, and requires the week to be open.
 
@@ -1044,8 +1058,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** The shared close function, used by both triggers.
 *   **Proposed Changes:**
-    *   **`close_group_week(session, group_id, week_start, clock) -> CloseOutcome`:** the four steps in "The close".
-        *   It returns `closed`, `already_closed`, `locked` or `not_due`.
+    *   **`close_group_week(session, group_id, week_start, clock) -> CloseOutcome`:** the five steps in "The close".
+        *   It returns `closed`, `already_closed` or `not_due`.
         *   It commits its own transaction.
     *   **`rescore_matches(session, group_id, week_start) -> bool`:** recomputes the week from current active facts with `recorded_before = cutoff`, and compares the result with `saved_member_results`.
 
@@ -1056,8 +1070,10 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **`GET /v1/groups/{group_id}/weeks/{date}`:**
         *   `date` may be any day of the week. The response carries the computed `week_start`, so the app does no week math.
         *   **Open week:** live scores through `score_week`. Candidates aren't shown while the week is open.
+        *   **Closing** (between the cutoff and 5 minutes after it): live scores with `status: closing`, no candidates.
         *   **Due but not closed:** calls `close_group_week` first, then reads the result. This is close on read.
         *   **Closed week:** reads `week_results`.
+        *   **Access:** active members, plus removed members whose membership is in that week's member set.
     *   **`PUT` / `DELETE /v1/groups/{group_id}/weeks/{date}/skip-token`:**
         *   The caller's own token.
         *   `PUT` returns `wasted` when the caller is already at N.
@@ -1088,8 +1104,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Proposed Changes:**
     *   **`create_app(settings, clock) -> FastAPI`:**
         *   Built with `separate_input_output_schemas=False`, so Pydantic v2 doesn't create duplicate `-Input`/`-Output` type names in the schema.
-        *   Mounts the routers under `/v1`, and installs the problem handler.
+        *   Mounts the API routers under `/v1` and the health router at the root (`/healthz`), and installs the problem handler.
     *   **Sentry:** initialized if a DSN is set.
+    *   **Workers:** the server runs with one uvicorn worker, so one scheduler runs (see "The close").
     *   **Scheduler:** when `SCHEDULER_ENABLED` is set, a lifespan hook starts it and stops it on shutdown.
 
 #### 36. `services/api/scripts/export_openapi.py` (Create)
@@ -1111,8 +1128,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
             *   Report a due week older than the lookback as an error.
         3.  **Check closed weeks:** for each group-week closed in the last 24 hours, call `rescore_matches`. Count mismatches, and report each one to Sentry.
         4.  **Count overdue:** set `overdue` with `count_overdue`.
-        5.  **Send notifications:** up to 100 unsent outbox rows, through `push_sender`. The payload is "This week's results are in for <group>"; it never names the loser.
-        6.  **Finish:** update the `job_runs` row.
+        5.  **Send notifications:** up to 100 unsent outbox rows, through `push_sender`, outside any open transaction, with a 10-second HTTP timeout. Each sent row stores its Expo ticket ID. The payload is "Last week's results are in for <group>"; it never names the loser. Retries 429 and 5xx responses on a later run.
+        6.  **Check receipts:** for rows sent at least 15 minutes ago with no receipt yet, fetch Expo receipts (up to 1,000 IDs per request), and delete push tokens reported as `DeviceNotRegistered`.
+        7.  **Finish:** update the `job_runs` row.
             *   Call `heartbeat.success()` if `groups_failed = 0` and `overdue = 0`, otherwise `heartbeat.fail()`.
             *   A failed ping is logged and never raises.
 
@@ -1120,14 +1138,14 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** In-process scheduler (D2).
 *   **Proposed Changes:**
-    *   **Job:** an APScheduler `BackgroundScheduler` with one interval job, `close_weeks`, every 5 minutes.
-    *   **Settings:** `max_instances=1`, `coalesce=True`, `misfire_grace_time=300`.
+    *   **Job:** an APScheduler `BackgroundScheduler` with one interval job, `close_weeks`, every 5 minutes, added with `next_run_time` set to now so it runs at startup. Other jobs (reminders, photo purge) are added by the specs that introduce them.
+    *   **Settings:** `max_instances=1`, `coalesce=True`, `misfire_grace_time=300`. `max_instances` applies per process, which is why the server runs one worker.
 
 #### 39. `services/api/src/socius_api/notifications/expo_push.py` and `services/api/src/socius_api/notifications/heartbeat.py` (Create)
 
 *   **Type / Scope:** Outbound clients.
 *   **Proposed Changes:**
-    *   **Push:** a thin httpx wrapper behind a `PushSender` protocol.
+    *   **Push:** a thin httpx wrapper behind a `PushSender` protocol, with `send(messages)` returning ticket IDs and `receipts(ticket_ids)`.
     *   **Heartbeat:** a `Heartbeat` protocol with `success()` and `fail()`, which call `CRON_HEARTBEAT_URL` and `CRON_HEARTBEAT_FAIL_URL`.
     *   **Tests:** both have recording fakes.
 
@@ -1143,7 +1161,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **App and auth:**
         *   `FakeClock`.
         *   An app built with the fake clock and the scheduler off.
-        *   An `auth_as(user)` helper that overrides the auth dependency.
+        *   An `auth_as(user)` helper that overrides the auth dependency, for API tests.
+        *   A test JWKS and a helper that signs real test JWTs, for the Schemathesis run and the auth tests, so authentication itself is exercised.
     *   **Data:** factories for users, groups, memberships and facts.
     *   **Fakes:** `PushSender` and `Heartbeat`.
 
@@ -1157,8 +1176,14 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   A retry after an undo doesn't create a new check-in.
     *   **Cutoff:** the fake clock set just before and just after the cutoff.
     *   **Excusal deadline:** `current_local_date` on Sunday is accepted; on Monday it is rejected with `excusal-window-closed`.
+    *   **Invariant 7:** a second check-in for the same date is rejected with `already-checked-in`, and scores don't change.
+    *   **Invariant 13 and removals:** a member removed on Wednesday keeps their state and points, can still lose, can still read that week, and gets its results notification.
+    *   **Missing rows:** undo, withdraw and revoke with nothing active return `not-found`.
+    *   **New groups:** a group created on Sunday 20:00 UTC by a member in UTC−5 has settings for the creator's current week, and that week closes normally.
+    *   **Closing window:** a GET at cutoff + 1 minute returns `status: closing` with no candidates.
     *   **Settings:** a change made during the weekend overlap lands in `next_effective_week` and doesn't affect any open week.
     *   **Close on read:** CUJ 5. A GET for a due week with no result closes it, and a second GET returns the same result.
+    *   **Request IDs:** another user's `client_request_id` gets `request-conflict`.
     *   **Privacy:**
         *   A non-member gets 404 `not-member` for every group endpoint.
         *   No response contains `tz_name` or `utc_offset_minutes`.
@@ -1169,6 +1194,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Close tests, real Postgres, fake clock.
 *   **Proposed Changes:**
     *   **CUJs:** CUJs 2 and 3, end to end.
+    *   **Invariant 10:** reruns produce one result with the same loser (this item and item 43).
     *   **Timing:** nothing closes before `cutoff + 5 min`.
     *   **Reruns:** a second run changes nothing.
     *   **Late writes:**
@@ -1184,14 +1210,14 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Concurrency tests (`@pytest.mark.concurrency`).
 *   **Proposed Changes:**
     *   **Two schedulers at once:** two threads, each with its own connection, run `run_close_weeks` at the same moment. The result is one `week_results` row, one set of outbox rows and one loser.
-    *   **Scheduler and read at once:** one thread runs `run_close_weeks` while another sends the close-on-read GET. Same expected result.
+    *   **Scheduler and read at once:** one thread runs `run_close_weeks` while another sends the close-on-read GET. The GET waits for the lock and returns the saved result; one result, one set of outbox rows.
     *   **Crash recovery:** a close that raises mid-transaction doesn't block the next run, because the transaction lock is released.
     *   **Repetition:** each scenario runs 20 times, to catch races that only happen sometimes.
 
 #### 44. `services/api/tests/contract/test_schema_conformance.py` (Create)
 
 *   **Type / Scope:** Schemathesis.
-*   **Proposed Changes:** Runs Schemathesis checks against the in-process ASGI app, authenticated as a seeded user. It checks that responses and status codes match the schema.
+*   **Proposed Changes:** Runs Schemathesis's default checks against the in-process ASGI app, authenticated with a real test JWT signed by the test JWKS (not the dependency override, so the unauthenticated-request check holds). Checks include response bodies, status codes and content types against the schema. Where a schema-valid request is correctly rejected (for example `week-closed`), the expected statuses for that operation are configured explicitly.
 
 ### Part A, Stage 7: Generated client package
 
@@ -1226,6 +1252,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 | Item 48: new requirement for specific error messages | Added as FR-15a | Keeps existing requirement numbers stable |
 | Item 51: README Development section | Added, with a note that the `just` commands work only once Part A, Stage 1 lands | The commands don't exist yet |
 | Item 50: CLAUDE.md "Current status" follows Parts A and B | Done; Stage 8 listed as complete | — |
+| Item 48: FR-11, delete | FR-11 kept and rewritten to the new acceptance rule (any day of the open week, up to the cutoff) | Same topic as before (when a check-in is accepted), so references to FR-11 stay meaningful |
+| Item 49: replace the HLD architecture diagram with a link | Kept a system-level diagram and added a link to the engine's diagram | The HLD diagram covers parts outside the engine (photo storage, signed uploads) |
+| Item 49: user, profile, photo and push-token tables stay in the HLD | `push_tokens` is defined in this design instead | The close sends notifications, so the engine owns the table |
 
 The rest of this stage is kept as the record of what changed.
 
@@ -1454,11 +1483,12 @@ These screens are useful only once spec 0001 (groups and invites) is built.
     *   Reported for `domain/` and `close.py`, but not enforced.
     *   The gate is that every invariant and every CUJ has a named test. A checklist in the PR description maps each invariant number to its test.
 *   **Integration:**
-    *   **Local:** on Docker Postgres with the fake clock, run the five CUJs as API tests.
+    *   **Local:** CUJs 1 and 4 as domain example tests (item 18); CUJs 2, 3 and 5 as API and close tests on Docker Postgres with the fake clock (items 41–42).
     *   **Staging:**
         1.  On a real iPhone dev build, check in and see the live leaderboard.
         2.  Restart the API with `FAKE_NOW` past the cutoff, with the scheduler disabled.
         3.  Open the week and see it closed on read.
+        4.  Staging isn't always on (see Non-Functional Requirements, Cost), so these steps run against a staging service started for the test.
 *   **Operational:** in staging, check that the monitors alert:
     *   **Missing ping:** disable the heartbeat ping and confirm the monitor alerts within its window.
     *   **Failing close:** force a failing group and confirm the failure signal reaches the monitor.
@@ -1481,6 +1511,3 @@ These screens are useful only once spec 0001 (groups and invites) is built.
     *   *Trade-offs:* each side uses its natural style.
     *   *When it fails:* the two copies of the data-access code drift apart, so the close and live reads could compute scores from differently written queries.
 
---------------------------------------------------------------------------------
-
-*Drafted with EGM*
