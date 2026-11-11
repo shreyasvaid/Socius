@@ -17,7 +17,7 @@ iOS and Android are both required (PRD G5). Most testers use iPhone, but Android
 3. **React Native with Expo (TypeScript)**: one codebase, TypeScript end to end with the generated API client, cloud builds (EAS) and push notifications included.
 
 ## Decision
-React Native with Expo and TypeScript (strict), Expo Router for navigation, TanStack Query for server state. The exact Expo SDK version is pinned when the app is scaffolded and recorded here as an addendum note before the ADR is relied on.
+React Native with Expo and TypeScript (strict), Expo Router for navigation, TanStack Query for server state. The exact Expo SDK version is pinned in `apps/mobile/package.json` when the app is scaffolded. A later SDK upgrade needs a new ADR only if it changes one of these decisions.
 
 ## Consequences
 - One codebase and one language with the API client.

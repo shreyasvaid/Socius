@@ -17,7 +17,7 @@ The repo holds three packages: the Expo app, the FastAPI service, and the genera
 3. **Each language's own tools plus a small task runner**: pnpm workspaces for JavaScript, uv for Python, and a root `justfile` with one recipe per task.
 
 ## Decision
-Option 3. `just setup`, `dev`, `test`, `lint`, `fmt`, `typecheck`, `gen-client`, `check-client`, `db-up` and `migrate` are the entry points; CI calls the same recipes. Whether `.npmrc` needs `node-linker=hoisted` for the pinned Expo SDK is checked while scaffolding and noted here.
+Option 3. `just setup`, `dev`, `test`, `lint`, `fmt`, `typecheck`, `gen-client`, `check-client`, `db-up` and `migrate` are the entry points; CI calls the same recipes. Whether `.npmrc` needs `node-linker=hoisted` for the pinned Expo SDK is checked while scaffolding and explained in a comment in `.npmrc`.
 
 ## Consequences
 - No shared build cache; CI rebuilds what it needs each run.

@@ -721,7 +721,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** pnpm configuration.
 *   **Proposed Changes:**
-    *   **Linker:** set `node-linker=hoisted` only if the pinned Expo SDK's monorepo guide still requires it. Check this while scaffolding, and record the result in ADR-0005.
+    *   **Linker:** set `node-linker=hoisted` only if the pinned Expo SDK's monorepo guide still requires it. Check this while scaffolding, and explain the result in a comment in `.npmrc`.
     *   **Peer dependencies:** set `strict-peer-dependencies=false` only if Expo's peer dependencies require it.
 
 #### 4. `justfile` (Create)
@@ -1334,10 +1334,10 @@ Rule for this stage: the PRD, HLD and CLAUDE.md **summarize and link** to this d
 | ADR | File name | Status | Records |
 |---|---|---|---|
 | 0001 | `0001-docs-process.md` | Accepted | PRD, HLD, design docs, specs and ADRs, and when each is used. Covers the PRD/HLD split. |
-| 0002 | `0002-react-native-expo.md` | Accepted | React Native and Expo over native Swift. Pinned Expo SDK version. |
+| 0002 | `0002-react-native-expo.md` | Accepted | React Native and Expo over native Swift. |
 | 0003 | `0003-fastapi-backend.md` | Accepted | A FastAPI backend; the app never touches the database; synchronous SQLAlchemy (D4). |
 | 0004 | `0004-supabase-auth.md` | Proposed | Supabase Auth and its JWT signing method; storage options. |
-| 0005 | `0005-build-tooling.md` | Accepted | pnpm + uv + just, the `.npmrc` finding, Alternative U, and when to revisit. |
+| 0005 | `0005-build-tooling.md` | Accepted | pnpm + uv + just, Alternative U, and when to revisit. |
 | 0006 | `0006-api-contract.md` | Accepted | OpenAPI → openapi-typescript (D3), the client diff check, Schemathesis. |
 | 0007 | `0007-scoring-model.md` | Accepted | Shared N, points capped at N, `secrets.choice` tie-break; links to Decided Rules and Alternatives A–C, P. |
 | 0008 | `0008-time-model.md` | Accepted | Phone local date, Monday-keyed weeks, Monday 12:00 UTC cutoff; links to Time model and Alternatives D–F. |
@@ -1361,7 +1361,7 @@ These screens are useful only once spec 0001 (groups and invites) is built.
 *   **Proposed Changes:**
     *   **Files:** `package.json`, `app.json`, `tsconfig.json` (strict), `eslint.config.js`, `.prettierrc`, `jest.config.js` (jest-expo preset).
     *   **Libraries:** Expo Router, TanStack Query and the Supabase JS client.
-    *   **SDK:** the Expo SDK version is pinned exactly and recorded in ADR-0002.
+    *   **SDK:** the Expo SDK version is pinned exactly in `apps/mobile/package.json` (see ADR-0002).
 
 #### 66. `apps/mobile/src/lib/localDate.ts` (Create)
 
