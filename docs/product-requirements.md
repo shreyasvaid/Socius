@@ -55,9 +55,9 @@ Group accountability is a crowded space (e.g., Pact, Forfeit, DealUp, Repple). S
 
 ### 2.3 Success criteria for v0.1
 
-- The founding test group (4–5 people) uses it for 4 consecutive weeks.
+- The founding test group (4–5 people) uses it for at least four closed 7-day periods.
 - Period results are computed correctly with zero manual intervention.
-- CI green on `main`; every scoring invariant in the [engine design](designs/game-engine.md#testing-approach) has a property-based test.
+- CI green on `main`; every scoring invariant in the [engine design](designs/game-engine.md#testing-approach) has a named test of the type the design gives.
 
 ---
 
@@ -107,7 +107,7 @@ Requirements are labeled `FR-x` and referenced from specs and tests.
 
 ### 5.2 Groups (v0.1)
 
-- FR-5. A user can create a group: name, period length, target N, time zone (defaults to the creator's), first start date, punishment text.
+- FR-5. A user can create a group: name, period length, target N, time zone (defaults to the creator's), punishment text. The admin taps Start when everyone has joined; the first period begins at the next midnight in the group's zone.
 - FR-6. An admin can invite members via a shareable invite code/link. Codes expire and can be revoked.
 - FR-7. Max 8 active members per group in v0.1.
 - FR-8. Members cannot leave a group on their own; an admin removes members. A group can have several admins; promoting and stepping down are defined in spec 0001. Removal mid-period: see [Decided Rules](designs/game-engine.md#decided-rules).
@@ -117,12 +117,12 @@ Requirements are labeled `FR-x` and referenced from specs and tests.
 
 - FR-10. A member can check in any number of times; each check-in is a point, up to N. [Rule](designs/game-engine.md#decided-rules).
 - FR-11. A check-in counts in the period that is open when the server receives it. [Rule](designs/game-engine.md#decided-rules).
-- FR-12. A check-in may include up to 3 optional proof photos, visible to group members.
-- FR-13. A member can undo their own check-in while its period is open. [Rule](designs/game-engine.md#decided-rules).
+- FR-12. A check-in may include up to 3 optional proof photos, visible to members of the groups it counted in.
+- FR-13. A member can undo their own check-in while every period it counts in is still open. [Rule](designs/game-engine.md#decided-rules).
 - FR-14. **Honor system.** No verification in v0.1. *(Planned: a member can "challenge" a check-in without photos; resolution TBD; see Q6.)*
 - FR-15. A check-in counts in every group the user belongs to.
-- FR-15b. The app shows each group's deadline in the member's own local time.
-- FR-15a. Every rejected action shows a specific message saying why (for example, "You've already checked in today.").
+- FR-15a. Every rejected action shows a specific message saying why (for example, "That period has already ended.").
+- FR-15b. The app shows each group's deadline, and every check-in time, in the member's own local time.
 
 ### 5.4 Excusals (v0.1)
 
@@ -134,7 +134,7 @@ See §6.
 
 ### 5.6 Notifications (v0.1)
 
-- FR-16. Reminder if not checked in by a configurable time (default 19:00), in the phone's current time zone (reported by the app when it opens).
+- FR-16. Reminder if the member hasn't checked in since midnight in the phone's current time zone by a configurable time (default 19:00). The phone reports its zone when the app opens.
 - FR-17. *(Removed: rest-day vote notifications. Rest-day votes are cut from v0.1.)*
 - FR-18. *(Removed: vote reminders.)*
 - FR-19. Period closed → "results are in" notification to the group. The notification doesn't name the loser; the results screen does.
@@ -224,7 +224,7 @@ Rule: **only ask for a field in the phase that uses it.** Every onboarding field
 | Goal | ✅ | ❌ *(Q5: allow opt-in sharing?)* | — |
 | Calorie targets, food logs, food photos | ✅ | ❌ | — |
 | Display name | ✅ | ✅ | — |
-| Check-ins (time, shown in the group's time zone) | ✅ | ✅ | — |
+| Check-ins (time, shown in each viewer's local time) | ✅ | ✅ (groups the check-in counted in) | — |
 | The phone's current time zone (stored for reminders) | ✅ (stored) | ❌ never shown (reveals location) | — |
 | Proof photos | ✅ | ✅ | — |
 | Points and period results | ✅ | ✅ | — |
@@ -241,7 +241,7 @@ Retention: proof photos deleted after 30 days (Q9). Account deletion hard-delete
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | **0: Foundation** | Design doc, ADRs, monorepo scaffold, CI, local dev env, auth wired end-to-end | "Hello authenticated user" on a real iPhone via dev build; CI green |
-| **v0.1: The game** | Profiles (min), groups, invites, periods and target, check-ins (+ optional photos), admin excusals, scoring, close, results, push ([engine design](designs/game-engine.md)) | Test group uses it for 4 weeks |
+| **v0.1: The game** | Profiles (min), groups, invites, periods and target, check-ins (+ optional photos), admin excusals, scoring, close, results, push ([engine design](designs/game-engine.md)), account deletion | Test group uses it for at least four closed 7-day periods |
 | **v0.2: Targets** | Full profile, calorie/macro targets with guardrails, manual food logging, target advisor | Targets validated against reference calculators |
 | **v0.3: Photo logging** | Photo → editable macro estimate via vision model | Estimates always user-confirmed |
 | **v0.4: Plans** | Rule-based per-user workout plans fitted to the group's target | Plans generated for every goal × target combination in tests |

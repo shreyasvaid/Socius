@@ -168,7 +168,7 @@ The game engine's testing approach and its numbered invariants are in the [engin
 
 | Layer | Tooling | Focus |
 |---|---|---|
-| Domain (Python) | pytest + **Hypothesis** | Every written invariant has a property test; every user journey has an example test. Coverage is reported, not gated |
+| Domain (Python) | pytest + **Hypothesis** | Every written invariant has a named test of the type the engine design gives (property tests for the pure rules); every user journey has an example test. Coverage is reported, not gated |
 | API (Python) | pytest + httpx + real Postgres (CI service container), fake clock | AuthZ ([PRD §9](product-requirements.md#9-privacy-and-visibility) privacy table as tests), validation, safe retries |
 | Close job | Real Postgres, fake clock, two connections | Same result on every rerun, including concurrent runs |
 | Mobile | Jest + React Native Testing Library | Screens, hooks, error messages |
@@ -203,8 +203,8 @@ The visibility rules are in [PRD §9](product-requirements.md#9-privacy-and-visi
 
 - Authorization checks live in the API layer and are covered by tests. Every endpoint touching profile or food data asserts `resource.user_id == caller`.
 - Every group endpoint returns 404 to non-members, so it doesn't reveal that the group exists. Admin actions also check the admin role.
-- A check-in's time zone and offset are stored but never included in any response.
-- Photos are served via short-lived signed URLs scoped to the caller's group membership.
+- The phone's time zone (`push_tokens.tz_name`, stored for reminders) is never included in any response.
+- Photos are served via short-lived signed URLs, only to members of the groups the check-in counted in.
 
 Retention: proof photos deleted after 30 days ([PRD Q9](product-requirements.md#12-open-questions)). Account deletion hard-deletes profile, food, and photos; check-ins are anonymized so historical group results stay consistent.
 

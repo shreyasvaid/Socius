@@ -79,7 +79,7 @@ Tracked in PRD §12. Resolve them in the doc (and an ADR if significant) rather 
 ## Unconfirmed defaults (ask before treating as final)
 
 These were chosen by the assistant and not yet approved by Shreyas:
-18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · groups can have several admins · a removed member can still see results of periods they were part of and gets those periods' results notification · the admin picks the first period's start date (default: next midnight in the group's zone) · period length 1–365 days · N 1–100 (engine design, Decided Rules).
+18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · groups can have several admins · a removed member can still see results of periods they were part of and gets those periods' results notification · the game starts when the admin taps Start, at the next midnight in the group's zone · a deleted account is excused for its current periods · period length 1–365 days · N 1–100 (engine design, Decided Rules).
 
 ## Environment
 
