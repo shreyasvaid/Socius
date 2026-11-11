@@ -9,7 +9,7 @@
 | **Superseded by** | — |
 
 ## Context
-The bugs that matter most here produce a wrong loser: scoring edge cases, date math, and the weekly close racing with late writes.
+The bugs that matter most here produce a wrong loser: scoring edge cases, date math, and the close racing with late writes.
 
 ## Options considered
 1. **A branch-coverage percentage as the gate**: easy to enforce; shows which lines ran, not whether results were checked.
@@ -22,11 +22,12 @@ The bugs that matter most here produce a wrong loser: scoring edge cases, date m
 - API and close tests run against real Postgres. Concurrency tests use separate connections and real commits, because a rolled-back-transaction fixture can't test races.
 - Schemathesis checks the API against its schema.
 
-Invariants and test layers: [Testing approach](../designs/weekly-game-engine.md#testing-approach). Rejected alternative: [V](../designs/weekly-game-engine.md#alternatives-considered).
+Invariants and test layers: [Testing approach](../designs/game-engine.md#testing-approach). Rejected alternative: [T](../designs/game-engine.md#alternative-t-a-branch-coverage-percentage-as-the-testing-target).
 
 ## Consequences
 - Each PR that adds a rule adds its invariant and test.
 - The test database is truncated between tests, which is slower than rolling back.
 
 ## Amendments
-- 2026-11-11: invariants that depend on the database (a duplicate check-in, removal mid-week, repeated closes) are tested with API or concurrency tests, not property tests. The decision is unchanged.
+- 2026-11-11: invariants that depend on the database (removal mid-period, settings changes, repeated closes) are tested with API or concurrency tests, not property tests. The decision is unchanged.
+- 2026-11-11: references updated after ADR-0011 (periods instead of weeks; renamed design file).

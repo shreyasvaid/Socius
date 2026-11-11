@@ -24,7 +24,8 @@ Option 3. `just setup`, `dev`, `test`, `lint`, `fmt`, `typecheck`, `gen-client`,
 - Revisit Nx, Turborepo or Bazel when CI time becomes a bottleneck, the number of packages grows well past a handful, or several contributors work in parallel.
 - `just` is one extra binary for contributors and CI to install.
 
-Full comparison: [engine design, Alternative U](../designs/weekly-game-engine.md#alternative-u-bazel-or-nx--turborepo-as-the-build-system).
+Full comparison: [engine design, Alternative S](../designs/game-engine.md#alternative-s-bazel-or-nx--turborepo-as-the-build-system).
 
 ## Amendments
 - 2026-11-11: corrected the pnpm linker note. Current Expo supports isolated installs, and the fallback setting lives in `pnpm-workspace.yaml`, not `.npmrc`. The decision is unchanged.
+- 2026-11-11: link updated to the renamed design file and alternative letter.

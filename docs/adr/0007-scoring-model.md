@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Superseded |
 | **Date** | 2026-11-11 |
 | **Deciders** | Shreyas Vaid |
 | **Supersedes** | — |
-| **Superseded by** | — |
+| **Superseded by** | [ADR-0011](0011-group-periods.md) |
 
 ## Context
 The core of the product is a fair, explainable weekly result that small groups trust without checking it. An earlier draft scored adherence (completed ÷ scheduled) against per-member goals.
@@ -21,7 +21,7 @@ Summary only; the engine design's Decided Rules is authoritative if the two ever
 
 A shared target N (1–7). Points are distinct check-in days plus a weekly skip token, capped at N. No loser if fewer than two members are eligible or every eligible member reaches N; otherwise the fewest points loses, and a tie is broken with `secrets.choice`, storing the candidates and the loser. Admin excusals and mid-week joins make a member ineligible for that week.
 
-The exact rules live only in the engine design: [Decided Rules](../designs/weekly-game-engine.md#decided-rules) and [Eligibility and the loser rule](../designs/weekly-game-engine.md#eligibility-and-the-loser-rule). Rejected alternatives: [A–C and P](../designs/weekly-game-engine.md#alternatives-considered).
+The exact rules live only in the engine design: [Decided Rules](../designs/game-engine.md#decided-rules) and [Eligibility and the loser rule](../designs/game-engine.md#eligibility-and-the-loser-rule). Rejected alternatives: [A–C and P](../designs/game-engine.md#alternatives-considered).
 
 ## Consequences
 - Scoring is a pure function, property-tested against written invariants.
@@ -30,3 +30,4 @@ The exact rules live only in the engine design: [Decided Rules](../designs/weekl
 
 ## Amendments
 - 2026-11-11: added the note that this decision text is a summary and the engine design is authoritative.
+- 2026-11-11: superseded by ADR-0011; links updated to the renamed design file (`docs/designs/game-engine.md`).

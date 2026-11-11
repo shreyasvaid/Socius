@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Superseded |
 | **Date** | 2026-11-11 |
 | **Deciders** | Shreyas Vaid |
 | **Supersedes** | — |
-| **Superseded by** | — |
+| **Superseded by** | [ADR-0011](0011-group-periods.md) |
 
 ## Context
 Members of one group can live in different time zones and travel, and one check-in must count in every group a member belongs to.
@@ -21,7 +21,7 @@ Summary only; the engine design's Decided Rules is authoritative if the two ever
 
 Option 3. A check-in is dated with the phone's local date (honor system). Weeks run Monday to Sunday and are keyed by their Monday's date, which handles the roughly 26-hour weekend overlap when two weeks are open. Every group's week closes at Monday 12:00 UTC, when Sunday has ended everywhere on Earth. Code takes the time from an injected clock, never from the system or the database.
 
-Full model: [Time model](../designs/weekly-game-engine.md#time-model). Rejected alternatives: [D–F](../designs/weekly-game-engine.md#alternatives-considered).
+Full model: [Time model](../designs/game-engine.md#time-model). Rejected alternatives: [D–F](../designs/game-engine.md#alternatives-considered).
 
 ## Consequences
 - No group time zone to store or convert.
@@ -30,3 +30,4 @@ Full model: [Time model](../designs/weekly-game-engine.md#time-model). Rejected 
 
 ## Amendments
 - 2026-11-11: added the note that this decision text is a summary and the engine design is authoritative.
+- 2026-11-11: superseded by ADR-0011; links updated to the renamed design file (`docs/designs/game-engine.md`).
