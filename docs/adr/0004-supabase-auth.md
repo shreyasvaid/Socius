@@ -1,0 +1,28 @@
+# ADR 0004: Supabase for authentication (and possibly storage)
+
+| | |
+|---|---|
+| **Status** | Proposed |
+| **Date** | 2026-11-11 |
+| **Deciders** | Shreyas Vaid |
+| **Supersedes** | — |
+| **Superseded by** | — |
+
+## Context
+Users sign in with email and Sign in with Apple (PRD FR-1). Writing authentication is a time sink and a security risk.
+
+## Options considered
+1. **Roll our own**: full control; password storage, reset flows and Apple sign-in are all ours to get right.
+2. **Clerk**: polished; another vendor with its own pricing.
+3. **Supabase Auth**: free tier, email and Apple sign-in, JWTs the API can verify; Supabase can also host Postgres and storage.
+
+## Decision (proposed)
+Supabase Auth issues JWTs; the FastAPI service verifies each token's signature, audience and expiry, and maps its subject to a `users` row. Whether Postgres and photo storage also live on Supabase (versus another host or Cloudflare R2) is still open.
+
+To settle before this ADR is accepted:
+- The JWT signing method Supabase currently uses for new projects (asymmetric keys published as JWKS, or a shared secret), checked against current Supabase documentation.
+- Where Postgres and storage are hosted, including free-tier pausing and backups (see the engine design's Risks & Mitigations).
+
+## Consequences
+- Sign-in depends on Supabase's availability.
+- The API never sees passwords.
