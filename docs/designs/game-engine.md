@@ -76,7 +76,7 @@ A mistake in any of these produces a wrong loser. In a small group of friends, o
 *   **Detecting cheating.** The server does not verify that a workout happened. Everything is on the honor system.
 *   **Members' own time zones.** Members can live anywhere, but only the group's deadline matters. The app shows the deadline in each member's local time so nobody has to convert.
 *   **Skip tokens, rest-day votes and member opt-outs.** Only check-ins count. An admin excusal covers absences.
-*   **Members leaving on their own.** Only an admin can remove a member.
+*   **Members leaving on their own.** Only the admin can remove a member.
 *   **The suspense animation, and draws members can verify.** Deferred. The server saves the tie-break candidates and the pick, so retries and history are consistent, but members can't check the draw themselves.
 *   **Closing a period early** once its result can't change. See Future Improvements.
 *   **Calendar-month periods.** Periods are a whole number of days; a "month" is 28, 30 or 31 days as the admin chooses.
@@ -98,9 +98,9 @@ These are the game rules in force. Every other section refers here instead of re
 | **Check-ins** | <ul><li>A check-in counts in every group the member belongs to whose current period is open at the moment the server records it (`recorded_at`).</li><li>No per-day limit: each check-in is one point.</li><li>A check-in that reaches the server after a period ended counts in the next period, not the ended one, even if the workout happened earlier (for example offline). Honor system throughout.</li></ul> |
 | **Points** | `points = min(N, counted check-ins in the period)`. Only check-ins made while the member belonged to the group count: after `joined_at` and, for a removed member, before `removed_at`. |
 | **Undo** | <ul><li>A member can undo any of their own check-ins as long as every period it counts in is still open. Once the earliest of those deadlines passes, it can't be undone in any group; per-group undo is a possible future improvement.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
-| **Excusal** | <ul><li>Only an admin can excuse a member for a period, including themselves, for any reason, any time before the period ends.</li><li>An excused member can't lose that period.</li><li>The reason is never stored. The group sees who was excused and by whom.</li><li>An excusal can be revoked before the period ends.</li><li>Excusals apply to the current period only; one can't be entered ahead for a future period.</li></ul> |
-| **Roles** | <ul><li>Two roles, `admin` and `member`. The creator is the first admin.</li><li>A group can have more than one admin. Promoting a member and stepping down are defined in spec 0001. **[default]**</li></ul> |
-| **Membership** | <ul><li>Members can't leave on their own; only an admin can remove a member.</li><li>A member removed during a period keeps their state for it and can still lose it. They can still read that period's result and get its results notification. **[default]**</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group, and the deleted member is treated as excused in each current period, so they can't lose it. **[default]** Their check-ins keep their `user_id`, so closed results never change; the `users` row is anonymized instead.</li></ul> |
+| **Excusal** | <ul><li>Only the admin can excuse a member for a period, including themselves, for any reason, any time before the period ends.</li><li>An excused member can't lose that period.</li><li>The reason is never stored. The group sees who was excused and by whom.</li><li>An excusal can be revoked before the period ends.</li><li>Excusals apply to the current period only; one can't be entered ahead for a future period.</li></ul> |
+| **Roles** | <ul><li>Two roles, `admin` and `member`. Each group has exactly one admin, starting with the creator.</li><li>The admin can hand the role to another active member; spec 0001 defines how.</li></ul> |
+| **Membership** | <ul><li>Members can't leave on their own; only the admin can remove a member.</li><li>A member removed during a period keeps their state for it and can still lose it. They can still read that period's result and get its results notification. **[default]**</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group, and the deleted member is treated as excused in each current period, so they can't lose it. **[default]** Their check-ins keep their `user_id`, so closed results never change; the `users` row is anonymized instead.</li></ul> |
 | **Group size** | At most 8 active members per group, enforced when a member joins (spec 0001). A period's member set can be larger if members were removed and replaced during it. |
 | **Joining** | A member who joins after a period has started can't lose that period. Their check-ins after joining still show as points. |
 | **Settings changes** | Changes to N, period length, time zone or punishment text take effect from the next period. The current period never changes. |
@@ -110,7 +110,7 @@ These are the game rules in force. Every other section refers here instead of re
 **Still open:**
 
 *   **Deleted accounts in past results.** The label shown for an anonymized member in history (likely "Deleted member"). The account-deletion spec decides; it is part of v0.1 (PRD FR-4).
-*   **The only admin deletes their account.** Who becomes admin? Spec 0001 decides.
+*   **The admin deletes their account.** Who becomes admin? Spec 0001 decides.
 
 --------------------------------------------------------------------------------
 
@@ -218,7 +218,7 @@ flowchart LR
 
 ### Core idea: store facts, compute scores
 
-The database stores facts that users or admins created (check-ins, excusals, settings changes, memberships) and one row per period with its boundaries and settings. Scores are never stored while a period is open. They are computed from the facts each time they're needed: for the live leaderboard, and once more at close. The close result is then frozen on the period row.
+The database stores facts that members or the admin created (check-ins, excusals, settings changes, memberships) and one row per period with its boundaries and settings. Scores are never stored while a period is open. They are computed from the facts each time they're needed: for the live leaderboard, and once more at close. The close result is then frozen on the period row.
 
 This removes two sources of bugs:
 
@@ -286,7 +286,8 @@ period_member_results period_id, user_id, state, counted_check_ins, points, is_l
                       PK (period_id, user_id)
 memberships           id, group_id, user_id, role (admin|member),
                       joined_at, removed_at
-                      PK (id); UNIQUE (group_id, user_id) WHERE removed_at IS NULL
+                      PK (id); UNIQUE (group_id, user_id) WHERE removed_at IS NULL;
+                      UNIQUE (group_id) WHERE role = 'admin' AND removed_at IS NULL
 check_ins             id, user_id, recorded_at, removed_at, client_request_id (uuid)
                       PK (id); UNIQUE (client_request_id)
 excusals              id, period_id, user_id, excused_by, recorded_at, removed_at
@@ -327,7 +328,7 @@ Every write that touches period `P` (undo, excuse, revoke) checks `clock.now() <
 | Excuse member | admin only; target must be in P's member set; before P ends | `not-admin`, `target-not-member`, `period-closed` |
 | Revoke excusal | admin only; an active excusal must exist; before P ends | `not-admin`, `not-found`, `period-closed` |
 | Change settings (N, period length, time zone, punishment text) | admin only; N 1–100, period 1–365 days, a valid IANA zone (out-of-range values are rejected by request validation); applies from the next period | `not-admin`, `invalid-request` |
-| Create group, Start, join, remove, re-add, promote, step down | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
+| Create group, Start, join, remove, re-add, hand over the admin role | defined in spec 0001; joining enforces the 8-member cap | `group-full`, `not-admin` |
 
 ### The close
 
@@ -546,7 +547,7 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 *   **How it works:** A member opts out of a period, or leaves the group, without asking anyone.
 *   **Pros:** Members control their own participation.
 *   **Cons:** Both are ways to escape losing: leaving and rejoining would make a member a mid-period joiner who can't lose.
-*   **Reason for Rejection:** Rejected by author: only admins excuse or remove members, and a re-add in the same period restores the earlier state. The cost is that a member who wants out must ask the admin, or delete their account.
+*   **Reason for Rejection:** Rejected by author: only the admin excuses or removes members, and a re-add in the same period restores the earlier state. The cost is that a member who wants out must ask the admin, or delete their account.
 
 #### Alternative K: Self-excusal needs another member's confirmation
 
@@ -679,7 +680,7 @@ The plan has two parts.
 *   **Part A (the engine):** everything needed to build and test the game engine without a phone. It also includes the scaffold, CI and the generated client that the contract check needs.
 *   **Part B (follow-ups):** the documentation updates (Stage 8, done) and the mobile app (Stage 9). Part B's screens need spec 0001 (groups and invites) to be useful.
 
-Each stage is one or more small PRs with green CI, and each stage depends on the ones before it, with one exception: the Expo scaffold (item 48) may be pulled forward so the Phase 0 sign-in check can run on a real phone. Database access is synchronous (Decision D4, at the end of this section).
+Each stage is one or more small PRs with green CI, and each stage depends on the ones before it. CI only runs checks that have something to check: Stage 1 starts it with lint, type checks and one smoke test, and each later stage adds its own step (see item 9), with one exception: the Expo scaffold (item 48) may be pulled forward so the Phase 0 sign-in check can run on a real phone. Database access is synchronous (Decision D4, at the end of this section).
 
 ### Part A, Stage 1: Repository scaffold and CI
 
@@ -709,22 +710,24 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Single command entry point.
 *   **Proposed Changes:**
 
-| Recipe | Runs |
-|---|---|
-| `setup` | `pnpm install` and `uv sync` |
-| `db-up` / `db-down` | Docker Compose |
-| `migrate` | `alembic upgrade head`, as the migration role |
-| `db-reset` | drop the local Docker volume and recreate the databases and roles |
-| `dev` | API with reload, plus the Expo dev server once `apps/mobile` exists |
-| `test` | `test-api`, plus `test-mobile` once `apps/mobile` exists |
-| `test-api` | pytest |
-| `test-mobile` | Jest |
-| `lint` | ruff check, ruff format --check, ESLint, Prettier --check |
-| `fmt` | ruff format, Prettier --write |
-| `typecheck` | pyright, `tsc --noEmit` per package |
-| `gen-client` | export OpenAPI, run openapi-typescript |
-| `check-client` | `gen-client`, then `git diff --exit-code packages/api-client` |
-| `ci` | every check CI runs |
+    *   A recipe is added in the stage that first gives it something to run, so no recipe is a placeholder.
+
+| Recipe | Runs | Added in |
+|---|---|---|
+| `setup` | `pnpm install` and `uv sync` | Stage 1 |
+| `db-up` / `db-down` | Docker Compose | Stage 1 |
+| `db-reset` | drop the local Docker volume and recreate the databases and roles | Stage 1 |
+| `test-api` | pytest | Stage 1 |
+| `test` | `test-api`, plus `test-mobile` once it exists | Stage 1 |
+| `lint` | ruff check and ruff format --check; ESLint and Prettier --check from Stage 7 | Stage 1 |
+| `fmt` | ruff format; Prettier --write from Stage 7 | Stage 1 |
+| `typecheck` | pyright; `tsc --noEmit` per package from Stage 7 | Stage 1 |
+| `ci` | every check CI runs, in the same order | Stage 1 |
+| `migrate` | `alembic upgrade head`, as the migration role | Stage 3 |
+| `dev` | API with reload; plus the Expo dev server from Stage 9 | Stage 4 |
+| `gen-client` | export OpenAPI, run openapi-typescript | Stage 7 |
+| `check-client` | `gen-client`, then `git diff --exit-code packages/api-client` | Stage 7 |
+| `test-mobile` | Jest | Stage 9 |
 
 #### 5. `.gitignore` (Modify)
 
@@ -766,18 +769,17 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   A `postgres:17` service container with `POSTGRES_DB: socius_test`. Service containers start before the repo is checked out, so the init script can't be mounted; a workflow step creates the role and sets its timeouts instead.
         *   `actions/setup-node`, pnpm through Corepack, `astral-sh/setup-uv` and `extractions/setup-just` (or the equivalent).
         *   uv and pnpm caches.
-    *   **Steps:** `just setup`, `just lint`, `just typecheck`, `just migrate` against the test database, `just test` and `just check-client`.
+    *   **Steps in Stage 1:** `just setup`, `just lint`, `just typecheck` and `just test` (the smoke test from item 11), plus a step that connects as the application role and checks that `transaction_timeout` is `30s`, so the role setup is tested before any code relies on it.
+    *   **Steps added later:** `just migrate` against the test database (Stage 3) and `just check-client` (Stage 7). Each is added in the PR that creates what it checks.
 
 #### 10. Branch protection on `main` (GitHub setting, not a file)
 
 *   **Type / Scope:** Repository setting.
 *   **Proposed Changes:** Require a PR and a green `ci` check. The author applies it in the GitHub UI or with `gh`, after confirming. From this point on, changes reach `main` through PRs.
 
-### Part A, Stage 2: Domain module (pure, no I/O)
+#### 11. `services/api/pyproject.toml`, `.python-version`, `src/socius_api/__init__.py`, `tests/test_smoke.py` (Create)
 
-#### 11. `services/api/pyproject.toml` (Create)
-
-*   **Type / Scope:** Python project managed by uv.
+*   **Type / Scope:** Python project managed by uv, created in Stage 1 so CI has real Python to lint, type-check and test from the first PR.
 *   **Proposed Changes:**
     *   **Python:** 3.12 or later, pinned by a `.python-version` file.
     *   **Runtime dependencies:**
@@ -793,6 +795,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   pyright in `strict` mode on `src/`
         *   pytest markers `db` and `concurrency`
         *   a Hypothesis profile `ci` with more examples
+    *   **Smoke test:** `src/socius_api/__init__.py` defines `__version__`, and `tests/test_smoke.py` imports the package and checks it. Stage 2 adds the first real tests; the smoke test can then be deleted.
+
+### Part A, Stage 2: Domain module (pure, no I/O)
 
 #### 12. `services/api/src/socius_api/domain/periods.py` (Create)
 
@@ -1176,12 +1181,13 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 ### Part A, Stage 7: Generated client package
 
-#### 45. `packages/api-client/package.json`, `tsconfig.json` (Create)
+#### 45. `packages/api-client/package.json`, `tsconfig.json`, root `eslint.config.js` and `.prettierrc` (Create)
 
 *   **Type / Scope:** Workspace package `@socius/api-client`.
 *   **Proposed Changes:**
     *   **Dependencies:** `openapi-fetch`, with `openapi-typescript` as a dev dependency. Both versions are pinned exactly.
     *   **TypeScript:** strict mode.
+    *   **Shared JS tooling:** the root `eslint.config.js` and `.prettierrc` apply to every TypeScript package. This is the first TypeScript in the repo, so `just lint`, `just fmt` and `just typecheck` gain their ESLint, Prettier and `tsc` steps in this PR.
 
 #### 46. `packages/api-client/src/schema.d.ts` (Create, generated)
 
@@ -1213,7 +1219,7 @@ These screens are useful only once spec 0001 (groups and invites) is built.
 
 *   **Type / Scope:** Expo app, created with the current `create-expo-app` TypeScript template, then trimmed.
 *   **Proposed Changes:**
-    *   **Files:** `package.json`, `app.json`, `tsconfig.json` (strict), `eslint.config.js`, `.prettierrc`, `jest.config.js` (jest-expo preset).
+    *   **Files:** `package.json`, `app.json`, `tsconfig.json` (strict), `jest.config.js` (jest-expo preset). It uses the root ESLint and Prettier configs from item 45; if this item is pulled forward ahead of item 45, it creates them.
     *   **Libraries:** Expo Router, TanStack Query and the Supabase JS client.
     *   **SDK:** the Expo SDK version is pinned exactly in `apps/mobile/package.json` (see ADR-0002).
 
@@ -1240,7 +1246,7 @@ These screens are useful only once spec 0001 (groups and invites) is built.
 *   **Type / Scope:** Screens.
 *   **Proposed Changes:**
     *   **Today:** the check-in button, and each group's points and deadline (in the member's local time, with a countdown).
-    *   **Group:** the live leaderboard for the current period: points out of N, badges for excused and joined mid-period, and excuse buttons for admins.
+    *   **Group:** the live leaderboard for the current period: points out of N, badges for excused and joined mid-period, and excuse buttons for the admin.
     *   **Period result and history:** a list of past periods; each result shows the final scores and the loser, a "decided by tie-break" label, excusals with who made them, and the punishment.
     *   **Settings:** admin-only N, period length, time zone and punishment, with "applies from <date>" using `applies_from`.
     *   **Not included:** the suspense animation.

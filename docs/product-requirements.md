@@ -110,7 +110,7 @@ Requirements are labeled `FR-x` and referenced from specs and tests.
 - FR-5. A user can create a group: name, period length, target N, time zone (defaults to the creator's), punishment text. The admin taps Start when everyone has joined; the first period begins at the next midnight in the group's zone.
 - FR-6. An admin can invite members via a shareable invite code/link. Codes expire and can be revoked.
 - FR-7. Max 8 active members per group in v0.1.
-- FR-8. Members cannot leave a group on their own; an admin removes members. A group can have several admins; promoting and stepping down are defined in spec 0001. Removal mid-period: see [Decided Rules](designs/game-engine.md#decided-rules).
+- FR-8. Members cannot leave a group on their own; the admin removes members. Each group has exactly one admin, starting with the creator; handing the role to another member is defined in spec 0001. Removal mid-period: see [Decided Rules](designs/game-engine.md#decided-rules).
 - FR-9. A user may belong to more than one group.
 
 ### 5.3 Check-ins (v0.1)

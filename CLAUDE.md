@@ -23,8 +23,8 @@ Done:
 - [x] Part B, Stage 8: PRD, HLD, README, CLAUDE.md and templates updated to link the game engine design
 
 Next, in order (item numbers refer to the design's Detailed Implementation Plan):
-1. Part A, Stage 1: scaffold and CI (items 1–10): pnpm workspace, root `justfile`, Docker Compose Postgres, `.env.example`, GitHub Actions CI, branch protection on `main`.
-2. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 11–47).
+1. Part A, Stage 1: scaffold and CI (items 1–11): pnpm workspace, root `justfile`, Docker Compose Postgres, `.env.example`, GitHub Actions CI, branch protection on `main`, and a minimal `services/api` Python project with a smoke test so CI checks real code from the first PR.
+2. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 12–47).
 3. Wire auth end-to-end (Supabase Auth → JWT verified by FastAPI → `GET /v1/me` from the app on a real iPhone dev build). That's the Phase 0 exit criterion; it needs the Expo scaffold (item 48) early.
 4. First v0.1 spec: `docs/specs/0001-groups-and-invites.md` (groups, invites, removing and re-adding members, 8-member cap). The four-week trial (design G1) depends on it.
 5. Part B, Stage 9: mobile app (items 48–52).
@@ -79,7 +79,7 @@ Tracked in PRD §12. Resolve them in the doc (and an ADR if significant) rather 
 ## Unconfirmed defaults (ask before treating as final)
 
 These were chosen by the assistant and not yet approved by Shreyas:
-18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · groups can have several admins · a removed member can still see results of periods they were part of and gets those periods' results notification · the game starts when the admin taps Start, at the next midnight in the group's zone · a deleted account is excused for its current periods · period length 1–365 days · N 1–100 (engine design, Decided Rules).
+18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · a removed member can still see results of periods they were part of and gets those periods' results notification · the game starts when the admin taps Start, at the next midnight in the group's zone · a deleted account is excused for its current periods · period length 1–365 days · N 1–100 (engine design, Decided Rules).
 
 ## Environment
 
