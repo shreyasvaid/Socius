@@ -1,0 +1,55 @@
+[project]
+name = "socius-api"
+version = "0.0.0"
+description = "Socius API"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.20.1",
+    "apscheduler>=3,<4",
+    "fastapi>=0.162.5",
+    "httpx>=0.28.1",
+    "psycopg[binary]>=3,<4",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "pyjwt[crypto]>=2.15.1",
+    "sentry-sdk>=2.74.0",
+    "sqlalchemy>=2,<3",
+    "tzdata>=2026.6",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.15",
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+    "schemathesis>=4.33.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+strict = ["src"]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "db: needs the test database",
+    "concurrency: runs concurrent transactions against the test database",
+]

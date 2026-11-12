@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same branch cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      # `just db-check` uses the runner's psql instead of the Compose container.
+      PSQL: psql
+      HYPOTHESIS_PROFILE: ci
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
+
+      - uses: extractions/setup-just@v4
+
+      # Same SQL file Docker runs locally, so roles and timeouts can't drift.
+      - name: Create roles and databases
+        run: >-
+          psql postgresql://postgres:postgres@localhost:5432/postgres
+          -v ON_ERROR_STOP=1
+          -f docker/postgres-init/01-roles-and-databases.sql
+
+      - run: just setup
+      - run: just db-check
+      - run: just lint
+      - run: just typecheck
+      - run: just test
