@@ -2,7 +2,7 @@
 
 **Fitness accountability for couples, families, and roommates. Show up, or take the punishment.**
 
-> **Status: in design.** No application code yet. Start with the [product requirements](docs/product-requirements.md).
+> **Status: early development.** The repo scaffold and CI are in place; no app features yet. Start with the [product requirements](docs/product-requirements.md).
 
 ## What it is
 
@@ -35,17 +35,19 @@ Socius is a cross-platform mobile app for small groups who already know each oth
 
 ## Development
 
-The repo scaffold hasn't started yet (it's the next step), so these commands don't work yet. Once it lands:
-
-**Prerequisites:** Node (current LTS), pnpm via Corepack, [uv](https://docs.astral.sh/uv/), [just](https://github.com/casey/just), Docker.
+**Prerequisites:** Node 24 with Corepack enabled (`corepack enable`), [uv](https://docs.astral.sh/uv/), [just](https://github.com/casey/just), Docker. uv installs Python 3.14 itself; no local `psql` is needed.
 
 ```sh
-just setup     # install JS and Python dependencies
-just db-up     # start local Postgres
-just migrate   # apply database migrations
-just dev       # run the API and the Expo dev server
-just test      # run all tests
+just setup      # install JS and Python dependencies from the lockfiles
+just db-up      # start local Postgres 17 (databases socius and socius_test)
+just db-check   # confirm the database roles' timeouts are in force
+just lint       # ruff check and format check
+just typecheck  # pyright
+just test       # run all tests
+just ci         # everything CI runs, in the same order
 ```
+
+`just fmt` fixes formatting and import order, `just db-down` stops Postgres, and `just db-reset` wipes it and recreates the databases and roles. Copy `.env.example` to `.env` for local settings. Run `just` to list every recipe.
 
 ## License
 

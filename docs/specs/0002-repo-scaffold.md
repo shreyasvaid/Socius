@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Agreed |
+| **Status** | Implemented |
 | **Author** | Shreyas Vaid |
 | **Design refs** | [Engine design](../designs/game-engine.md#part-a-stage-1-repository-scaffold-and-ci), Part A, Stage 1 (items 1–11); [ADR-0005](../adr/0005-build-tooling.md) build tooling; [ADR-0009](../adr/0009-close.md) close protection (role timeouts); HLD §7 (quality strategy) |
 | **Phase** | Phase 0 |

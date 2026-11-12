@@ -714,15 +714,16 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 | Recipe | Runs | Added in |
 |---|---|---|
-| `setup` | `pnpm install` and `uv sync` | Stage 1 |
+| `setup` | `pnpm install --frozen-lockfile` and `uv sync --locked`, so a stale lockfile fails | Stage 1 |
 | `db-up` / `db-down` | Docker Compose | Stage 1 |
 | `db-reset` | drop the local Docker volume and recreate the databases and roles | Stage 1 |
+| `db-check` | connect to `socius_test` as each role and check the three timeouts (`30s` for the application role, `0` for the migration role) | Stage 1 |
 | `test-api` | pytest | Stage 1 |
 | `test` | `test-api`, plus `test-mobile` once it exists | Stage 1 |
 | `lint` | ruff check and ruff format --check; ESLint and Prettier --check from Stage 7 | Stage 1 |
-| `fmt` | ruff format; Prettier --write from Stage 7 | Stage 1 |
+| `fmt` | ruff check --fix (import order and other safe fixes), then ruff format; Prettier --write from Stage 7 | Stage 1 |
 | `typecheck` | pyright; `tsc --noEmit` per package from Stage 7 | Stage 1 |
-| `ci` | every check CI runs, in the same order | Stage 1 |
+| `ci` | `setup`, `db-check`, `lint`, `typecheck`, `test`: every check CI runs, in the same order | Stage 1 |
 | `migrate` | `alembic upgrade head`, as the migration role | Stage 3 |
 | `dev` | API with reload; plus the Expo dev server from Stage 9 | Stage 4 |
 | `gen-client` | export OpenAPI, run openapi-typescript | Stage 7 |
@@ -738,7 +739,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Documented environment variables.
 *   **Proposed Changes:**
-    *   **Database:** `DATABASE_URL`, `DB_POOL_SIZE`.
+    *   **Database:** `DATABASE_URL` (application role), `MIGRATION_DATABASE_URL` (migration role, used by `just migrate`), `DB_POOL_SIZE`.
     *   **Auth:** `SUPABASE_URL`, `SUPABASE_JWKS_URL` (`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`), `SUPABASE_JWT_ISSUER` (`<SUPABASE_URL>/auth/v1`), `SUPABASE_JWT_AUDIENCE`. See ADR-0004.
     *   **Monitoring:** `SENTRY_DSN`, `CRON_HEARTBEAT_URL`, plus the monitor's failure URL, `CRON_HEARTBEAT_FAIL_URL`.
     *   **Push:** `EXPO_ACCESS_TOKEN`, needed only if Expo's enhanced push security is turned on.
@@ -753,12 +754,12 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Local Postgres.
 *   **Proposed Changes:**
     *   **Main database:** a `postgres:17` service with a named volume, a health check and port 5432. Version 17 is required for `transaction_timeout`.
-    *   **Test database:** `socius_test`, created by an init script for the test suite. Init scripts run only when the volume is first created; `just db-reset` recreates it.
+    *   **Databases:** `socius` (development) and `socius_test` (tests), created with the roles by the init script in item 8. Init scripts run only when the volume is first created; `just db-reset` recreates it.
 
-#### 8. `docker/postgres-init/01-create-test-db.sql` (Create)
+#### 8. `docker/postgres-init/01-roles-and-databases.sql` (Create)
 
 *   **Type / Scope:** Postgres init script.
-*   **Proposed Changes:** Creates `socius_test`, the application role with the timeouts from "Close protection" (`ALTER ROLE … SET transaction_timeout = '30s'`, and the same for the other two), and a migration role without them. Used locally only; CI does the same in a workflow step.
+*   **Proposed Changes:** Creates the application role `socius_app` with the timeouts from "Close protection" (`ALTER ROLE … SET transaction_timeout = '30s'`, and the same for the other two), the migration role `socius_migrate` without them, and the databases `socius` and `socius_test`, both owned by `socius_migrate`. In each database, default privileges give `socius_app` `SELECT, INSERT, UPDATE, DELETE` on new tables and `USAGE, SELECT` on new sequences, so the application can use the schema but not change it. Docker runs it locally and CI runs the same file with `psql` (item 9), so the two can't drift.
 
 #### 9. `.github/workflows/ci.yml` (Create)
 
@@ -766,10 +767,10 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Proposed Changes:**
     *   **Triggers:** pull requests and pushes to `main`.
     *   **Services and tools:**
-        *   A `postgres:17` service container with `POSTGRES_DB: socius_test`. Service containers start before the repo is checked out, so the init script can't be mounted; a workflow step creates the role and sets its timeouts instead.
+        *   A `postgres:17` service container with the default `postgres` database. Service containers start before the repo is checked out, so the init script can't be mounted; after checkout, a step runs the same file (item 8) with `psql`.
         *   `actions/setup-node`, pnpm through Corepack, `astral-sh/setup-uv` and `extractions/setup-just` (or the equivalent).
-        *   uv and pnpm caches.
-    *   **Steps in Stage 1:** `just setup`, `just lint`, `just typecheck` and `just test` (the smoke test from item 11), plus a step that connects as the application role and checks that `transaction_timeout` is `30s`, so the role setup is tested before any code relies on it.
+        *   The uv cache. The pnpm cache is added with the first JavaScript dependency (Stage 7); until then there is nothing to cache.
+    *   **Steps in Stage 1:** `just setup`, `just db-check`, `just lint`, `just typecheck` and `just test` (the smoke test from item 11). `just db-check` tests the role setup before any code relies on it.
     *   **Steps added later:** `just migrate` against the test database (Stage 3) and `just check-client` (Stage 7). Each is added in the PR that creates what it checks.
 
 #### 10. Branch protection on `main` (GitHub setting, not a file)
@@ -781,7 +782,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Python project managed by uv, created in Stage 1 so CI has real Python to lint, type-check and test from the first PR.
 *   **Proposed Changes:**
-    *   **Python:** 3.12 or later, pinned by a `.python-version` file.
+    *   **Python:** 3.14, pinned by a `.python-version` file (spec 0002).
     *   **Runtime dependencies:**
         *   fastapi, uvicorn[standard], pydantic v2, pydantic-settings
         *   sqlalchemy 2.x, alembic, psycopg[binary] 3.x

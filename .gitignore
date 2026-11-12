@@ -69,3 +69,6 @@ htmlcov/
 *.sqlite3
 *.db
 pgdata/
+
+# ---------- Generated ----------
+services/api/openapi.json
