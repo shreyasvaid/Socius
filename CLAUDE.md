@@ -21,14 +21,13 @@ Done:
 - [x] Game engine design, reviewed and accepted (`docs/designs/game-engine.md`); revised for group periods by ADR-0011
 - [x] ADRs 0001–0011 (`docs/adr/`)
 - [x] Part B, Stage 8: PRD, HLD, README, CLAUDE.md and templates updated to link the game engine design
-- [x] Part A, Stage 1: scaffold and CI (items 1–9, 11; spec `docs/specs/0002-repo-scaffold.md`)
+- [x] Part A, Stage 1: scaffold, CI and branch protection (items 1–11; spec `docs/specs/0002-repo-scaffold.md`). Changes reach `main` only through PRs with a green `ci` check, squash-merged.
 
 Next, in order (item numbers refer to the design's Detailed Implementation Plan):
-1. Branch protection on `main` (item 10), applied with `gh api` after the scaffold PR merges.
-2. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 12–47).
-3. Wire auth end-to-end (Supabase Auth → JWT verified by FastAPI → `GET /v1/me` from the app on a real iPhone dev build). That's the Phase 0 exit criterion; it needs the Expo scaffold (item 48) early.
-4. First v0.1 feature spec: `docs/specs/0001-groups-and-invites.md` (groups, invites, removing and re-adding members, 8-member cap). The four-week trial (design G1) depends on it.
-5. Part B, Stage 9: mobile app (items 48–52).
+1. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 12–47). Stage 2 waits on the unconfirmed defaults below that affect the engine.
+2. Wire auth end-to-end (Supabase Auth → JWT verified by FastAPI → `GET /v1/me` from the app on a real iPhone dev build). That's the Phase 0 exit criterion; it needs the Expo scaffold (item 48) early.
+3. First v0.1 feature spec: `docs/specs/0001-groups-and-invites.md` (groups, invites, removing and re-adding members, 8-member cap). The four-week trial (design G1) depends on it.
+4. Part B, Stage 9: mobile app (items 48–52).
 
 Update this checklist as work lands.
 
