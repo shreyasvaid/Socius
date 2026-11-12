@@ -46,7 +46,8 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv publishes exact versions only, no major tag.
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: services/api/uv.lock
