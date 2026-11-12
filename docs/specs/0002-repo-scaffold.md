@@ -39,8 +39,8 @@ A contributor with the prerequisites installed (Node, Corepack, uv, just, Docker
 | Database ownership | Both databases are owned by `socius_migrate`. Default privileges give `socius_app` `SELECT, INSERT, UPDATE, DELETE` on new tables and `USAGE, SELECT` on new sequences. | Migrations create the tables; the application can use them but can't change the schema. Default privileges are per database, so they are set in each. |
 | Role setup in CI | CI runs the same SQL file as Docker (`docker/postgres-init/01-roles-and-databases.sql`) with `psql` after checkout. The service container uses the default `postgres` database. | One file defines roles, databases and timeouts, so local and CI can't drift. This replaces the design's `POSTGRES_DB: socius_test` plus a separate CI step. |
 | Migration URL | New variable `MIGRATION_DATABASE_URL` for `just migrate` (used from Stage 3) | `just migrate` runs as the migration role, so it needs its own connection string. |
-| Branch protection | Require a PR and the `ci` check, require linear history, block force pushes and deletion of `main`, apply to admins. No required approvals. | A solo project can't approve its own PRs; the green check is the gate. Linear history keeps `main` readable. |
-| Merging | Squash merge only, PR title as the commit subject, head branches deleted on merge | One conventional commit per PR on `main`, and no leftover branches. |
+| Branch protection | Require a PR and the `ci` check, require linear history, block force pushes and deletion of `main`, apply to admins, so the author can't bypass them either. No required approvals. Confirmed by the author. | A solo project can't approve its own PRs; the green check is the gate. A rule that can be bypassed doesn't protect `main`. Linear history keeps it readable. |
+| Merging | Squash merge only, PR title as the commit subject, head branches deleted on merge. Confirmed by the author. | One conventional commit per PR on `main`, and no leftover branches. The commits inside a PR stay visible on the closed PR. |
 
 ## Acceptance criteria
 
