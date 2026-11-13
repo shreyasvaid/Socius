@@ -395,7 +395,7 @@ The plan is Render's free tier with the uptime ping. The fallback is a small alw
 
 | Layer | What it proves | How |
 |---|---|---|
-| `domain/` scoring, eligibility, period math | The pure rules hold for all inputs | Hypothesis property tests for invariants 1–9, plus example tests for CUJs 3 and 4 |
+| `domain/` scoring, eligibility, period math | The pure rules hold for all inputs | Hypothesis property tests for invariants 1–9 and the pure part of 12, plus example tests for CUJs 3 and 4 |
 | API | Request rules, permissions, error codes, retries, close on read; invariants 11–13; CUJs 1 and 5 | pytest + httpx against real Postgres (Docker locally, a CI service container), fake clock; example tests (Hypothesis doesn't fit a per-test database fixture) |
 | Close | Invariant 10; late writes detected; CUJ 2 | Real Postgres, fake clock, two separate database connections for the concurrency tests |
 | Contract | The app client matches the API, and the API matches its schema | Client diff check + Schemathesis |
@@ -813,7 +813,9 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `contains(bounds, instant) -> bool`: `starts_at ≤ instant < ends_at`.
         *   `close_due_at(bounds) -> datetime`: `ends_at + 5 min`.
         *   `overdue_at(bounds) -> datetime`: `ends_at + 60 min`.
-    *   **Validation:** raises `ValueError` for `period_days` outside 1–365 or an unknown zone.
+        *   `validate_zone(tz_name) -> None`, for the settings endpoint.
+    *   **Validation:** raises `ValueError` for `period_days` outside 1–365, an unknown zone, or a naive datetime. `PeriodBounds` rejects `ends_at ≤ starts_at`.
+    *   **Skipped midnight:** where daylight saving skips midnight, `day_start` finds the transition instant by bisecting between the two readings of the missing wall time (fold 1 and fold 0). Where midnight happens twice, it takes the earlier one.
 
 #### 13. `services/api/src/socius_api/domain/scoring.py` (Create)
 
@@ -831,11 +833,13 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   `PeriodOutcome`:
             *   `scores: tuple[MemberScore, ...]`, sorted by user ID
             *   `candidates: tuple[UUID, ...]`, sorted by user ID
-            *   `kind`: one of `NO_LOSER_TOO_FEW_ELIGIBLE`, `NO_LOSER_ALL_REACHED_TARGET`, `SINGLE_LOSER`, `TIEBREAK_NEEDED`
+            *   `kind`, an `OutcomeKind` enum: `NO_LOSER_TOO_FEW_ELIGIBLE`, `NO_LOSER_ALL_REACHED_TARGET`, `SINGLE_LOSER`, `TIEBREAK_NEEDED`
     *   **Functions:**
+        *   `in_member_set(joined_at, removed_at, bounds) -> bool`: the member-set condition from "Eligibility and the loser rule", shared with the database layer's query.
         *   `member_state(joined_at, removed_at, excused, bounds) -> MemberState`. `EXCUSED` if `excused` or `removed_at < bounds.ends_at`. Joining mid-period takes precedence over both.
-        *   `points(member, target_n, bounds) -> int`. It counts check-ins inside the bounds, at or after `joined_at` and before `removed_at`, up to `target_n`.
-        *   `score_period(target_n: int, bounds: PeriodBounds, members: Sequence[MemberPeriodInput]) -> PeriodOutcome`
+        *   `counted_check_ins(member, bounds) -> int`: check-ins inside the bounds, at or after `joined_at` and before `removed_at`.
+        *   `points(member, target_n, bounds) -> int`: `counted_check_ins` up to `target_n`.
+        *   `score_period(target_n: int, bounds: PeriodBounds, members: Sequence[MemberPeriodInput]) -> PeriodOutcome`. Raises `ValueError` for N outside 1–100, a duplicate user, or a member outside the period's member set, so a loading bug fails loudly instead of scoring the wrong people.
         *   `pick_loser(candidates: Sequence[UUID], choose: Callable[[Sequence[UUID]], UUID] = secrets.choice) -> UUID`. It sorts the candidates by UUID, then calls `choose`. Tests pass a fixed `choose`.
     *   **Version:** `SCORING_VERSION = 1`.
 
@@ -851,7 +855,8 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
     *   **Zones:** a fixed list of IANA zones that includes ones with and without daylight saving, half-hour and 45-minute offsets, the extremes (`Pacific/Kiritimati`, `Etc/GMT+12`), and zones where daylight saving skips or repeats midnight (`America/Santiago`, `America/Havana`, `Asia/Beirut`).
     *   **Periods:** start days between 2020 and 2040, lengths 1–365.
     *   **Members:** members with random join times, removal times, excusals and check-in times inside and around a period; member sets of 1–12 (up to 8 active, plus members removed during the period).
-    *   **Targets:** `target_n` from 1 to 100.
+    *   **Targets:** `target_n` from 1 to 100, weighted towards 1–5 so ties and "everyone reached N" are common.
+    *   **Weighting:** about one member in five joins mid-period, is removed, or is excused, and most check-ins fall inside the period. Uniform draws made three periods in four have too few eligible members, so the loser rule was rarely exercised.
 
 #### 16. `services/api/tests/domain/test_periods.py` (Create)
 
@@ -869,7 +874,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 *   **Type / Scope:** Property tests.
 *   **Proposed Changes:**
     *   **Invariants:** 1–7, one test function each, named after the invariant, plus the pure part of invariant 12: a member with `removed_at` inside the period is never a candidate.
-    *   **Tie-break:** `pick_loser` always returns a member of the candidates. Over 1,000 calls with `secrets.choice`, every candidate in a set of 2–8 is picked at least once.
+    *   **Tie-break:** `pick_loser` always returns a member of the candidates (property). Over 1,000 calls with `secrets.choice`, every candidate in a set of 2–8 is picked at least once (an example test per set size, since repeating 1,000 calls per Hypothesis example adds time without adding coverage).
 
 #### 18. `services/api/tests/domain/test_scoring_examples.py` (Create)
 
@@ -884,7 +889,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 #### 19. `services/api/tests/domain/test_purity.py` (Create)
 
 *   **Type / Scope:** Architecture guard.
-*   **Proposed Changes:** Parses every `domain/*.py` file with `ast`. It fails on imports of `sqlalchemy`, `fastapi` or `httpx`, and on calls to `datetime.now`, `date.today` or `time.time`. `secrets` is allowed only in `scoring.py`, as the default argument of `pick_loser`.
+*   **Proposed Changes:** Parses every `domain/*.py` file with `ast`. It fails on imports of `sqlalchemy`, `fastapi`, `httpx`, `psycopg`, `requests`, `os` or `random`, and on calls to `datetime.now`, `datetime.utcnow`, `date.today` or `time.time`. `secrets` is allowed only in `scoring.py`, as the default argument of `pick_loser`.
 
 ### Part A, Stage 3: Database layer
 

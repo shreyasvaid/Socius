@@ -22,9 +22,10 @@ Done:
 - [x] ADRs 0001–0011 (`docs/adr/`)
 - [x] Part B, Stage 8: PRD, HLD, README, CLAUDE.md and templates updated to link the game engine design
 - [x] Part A, Stage 1: scaffold, CI and branch protection (items 1–11; spec `docs/specs/0002-repo-scaffold.md`). Changes reach `main` only through PRs with a green `ci` check, squash-merged.
+- [x] Part A, Stage 2: domain module (items 12–19): period math and scoring as pure functions, with property, example and purity tests
 
 Next, in order (item numbers refer to the design's Detailed Implementation Plan):
-1. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 12–47). Not started; begins when Shreyas gives the go-ahead.
+1. Part A, Stages 3–7: database, API, close job, tests, generated client (items 20–47). Stage 3 needs a Postgres host chosen first.
 2. Wire auth end-to-end (Supabase Auth → JWT verified by FastAPI → `GET /v1/me` from the app on a real iPhone dev build). That's the Phase 0 exit criterion; it needs the Expo scaffold (item 48) early.
 3. First v0.1 feature spec: `docs/specs/0001-groups-and-invites.md` (groups, invites, removing and re-adding members, 8-member cap). The four-week trial (design G1) depends on it.
 4. Part B, Stage 9: mobile app (items 48–52).
