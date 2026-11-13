@@ -93,14 +93,14 @@ These are the game rules in force. Every other section refers here instead of re
 | Topic | Rule |
 |---|---|
 | **Group time zone** | <ul><li>Each group stores one IANA time zone, set from the creator's phone when the group is created.</li><li>All of the group's deadlines are midnight in this zone. Members' own zones don't matter.</li><li>Changing it is an admin setting that takes effect from the next period, so an admin who travels doesn't move the current deadline.</li></ul> |
-| **Period** | <ul><li>A whole number of days, from 1 to 365 **[default range]**, set by the admin.</li><li>A period starts at the start of a day in the group's zone (local midnight, or the first instant of the day where daylight saving skips midnight) and ends at the start of the day after its last day. The next period starts the moment the previous one ends.</li><li>After a time-zone change, the next period starts where the previous one ended and ends at the start of a day in the new zone, so that one period is a few hours shorter or longer than its set length.</li><li>The game starts when the admin taps **Start**: the first period begins at the next start of a day in the group's zone, and everyone who joined before then plays it. Until then the group is set up but not playing. **[default]**</li></ul> |
-| **Target** | The admin sets one target N, from 1 to 100 **[default range]**. It is the same for every member. |
+| **Period** | <ul><li>A whole number of days, from 1 to 365, set by the admin.</li><li>A period starts at the start of a day in the group's zone (local midnight, or the first instant of the day where daylight saving skips midnight) and ends at the start of the day after its last day. The next period starts the moment the previous one ends.</li><li>After a time-zone change, the next period starts where the previous one ended and ends at the start of a day in the new zone, so that one period is a few hours shorter or longer than its set length.</li><li>The admin adds the members, sets the group's settings and then taps **Start**. The first period begins at the next start of a day in the group's zone, and everyone who joined before then plays it. Until then the group is set up but not playing.</li></ul> |
+| **Target** | The admin sets one target N, from 1 to 100. It is the same for every member. |
 | **Check-ins** | <ul><li>A check-in counts in every group the member belongs to whose current period is open at the moment the server records it (`recorded_at`).</li><li>No per-day limit: each check-in is one point.</li><li>A check-in that reaches the server after a period ended counts in the next period, not the ended one, even if the workout happened earlier (for example offline). Honor system throughout.</li></ul> |
 | **Points** | `points = min(N, counted check-ins in the period)`. Only check-ins made while the member belonged to the group count: after `joined_at` and, for a removed member, before `removed_at`. |
 | **Undo** | <ul><li>A member can undo any of their own check-ins as long as every period it counts in is still open. Once the earliest of those deadlines passes, it can't be undone in any group; per-group undo is a possible future improvement.</li><li>Undo hides the row instead of deleting it, so a delayed retry can't bring it back.</li></ul> |
 | **Excusal** | <ul><li>Only the admin can excuse a member for a period, including themselves, for any reason, any time before the period ends.</li><li>An excused member can't lose that period.</li><li>The reason is never stored. The group sees who was excused and by whom.</li><li>An excusal can be revoked before the period ends.</li><li>Excusals apply to the current period only; one can't be entered ahead for a future period.</li></ul> |
 | **Roles** | <ul><li>Two roles, `admin` and `member`. Each group has exactly one admin, starting with the creator.</li><li>The admin can hand the role to another active member; spec 0001 defines how.</li></ul> |
-| **Membership** | <ul><li>Members can't leave on their own; only the admin can remove a member.</li><li>A member removed during a period keeps their state for it and can still lose it. They can still read that period's result and get its results notification. **[default]**</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group, and the deleted member is treated as excused in each current period, so they can't lose it. **[default]** Their check-ins keep their `user_id`, so closed results never change; the `users` row is anonymized instead.</li></ul> |
+| **Membership** | <ul><li>Members can't leave on their own; only the admin can remove a member.</li><li>A member removed during a period is excused for it, so they can't lose it; their points up to the removal still show. They can still read that period's result and get its results notification **[default]**.</li><li>Re-adding a member in the same period restores their earlier state.</li><li>Deleting an account, which the App Store requires apps to allow, counts as removal from every group, so the deleted member is excused in each current period, like any removed member. Their check-ins keep their `user_id`, so closed results never change; the `users` row is anonymized instead.</li></ul> |
 | **Group size** | At most 8 active members per group, enforced when a member joins (spec 0001). A period's member set can be larger if members were removed and replaced during it. |
 | **Joining** | A member who joins after a period has started can't lose that period. Their check-ins after joining still show as points. |
 | **Settings changes** | Changes to N, period length, time zone or punishment text take effect from the next period. The current period never changes. |
@@ -249,7 +249,7 @@ Each member in the set is in exactly one state:
 | State | Condition | Can lose? |
 |---|---|---|
 | `joined_mid_period` | `joined_at > starts_at` | no |
-| `excused` | an active excusal exists for P, or their account was deleted during P, and they didn't join mid-period | no |
+| `excused` | an active excusal exists for P, or they were removed during P (`removed_at < ends_at`, which includes deleting their account), and they didn't join mid-period | no |
 | `eligible` | everyone else | yes |
 
 Joining mid-period takes precedence over an excusal. Both mean "can't lose", so the order only affects the label shown.
@@ -416,7 +416,7 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 9.  Successive periods are contiguous: each period's `starts_at` equals the previous period's `ends_at`.
 10. Running the close any number of times, through either trigger and including concurrently, leaves exactly one result per period, with the same loser.
 11. A settings change never changes a period that already exists.
-12. Removing a member during a period doesn't change their state for it, or the points they had when removed.
+12. Removing a member during a period makes them `excused` for it unless they joined mid-period, and doesn't change the points they had when removed. Re-adding them in the same period restores their earlier state.
 13. An undo, excusal or revocation that would change an ended period is rejected.
 
 ### Decisions in this section
@@ -653,6 +653,7 @@ The goal is not a coverage percentage. Every invariant below has a named test of
 | Offline check-in reaches the server after the deadline | A real workout counts in the next period instead | Stated rule; the app warns when a check-in is queued close to the deadline | Accepted risk |
 | A late write commits after the close | One member's count differs from the saved result | 30-second transaction timeout; 5-minute delay | Rescore mismatch count (G1 failure if non-zero) |
 | An admin excuses themselves just before the deadline | An admin dodges a loss | Excusals are visible to the group with who made them | Visible on the result screen (accepted risk) |
+| The member about to lose is removed, or deletes their account, just before the deadline | They dodge the punishment | Removal is admin-only and gives the admin no power beyond excusing; deleting an account loses all history | Visible in the group's member list (accepted risk) |
 | A member banks many check-ins on the last day | Points reflect taps, not training | Honor system; check-in times are visible to the group | Accepted risk |
 | A member or a bug floods check-ins | Database growth | Reads load at most N check-ins per member; add a per-user rate limit if it happens | Database size; error tracker |
 | A group goes idle for months | Each elapsed period still closes with a loser (everyone at 0) and sends a notification | Expected under the rules (Decided Rules, Idle groups); pausing a group is a future improvement | Visible in history |
@@ -824,7 +825,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
             *   `user_id: UUID`
             *   `joined_at: datetime`
             *   `removed_at: datetime | None`
-            *   `excused: bool` (an active excusal, or the account was deleted during the period)
+            *   `excused: bool`, true if an active excusal exists for the period. Removal isn't folded into this flag: `member_state` reads it from `removed_at`, so the rule is tested in the pure layer.
             *   `check_in_times: tuple[datetime, ...]`, active check-ins only
         *   `MemberScore`: `user_id`, `state`, `counted_check_ins`, `points`.
         *   `PeriodOutcome`:
@@ -832,7 +833,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
             *   `candidates: tuple[UUID, ...]`, sorted by user ID
             *   `kind`: one of `NO_LOSER_TOO_FEW_ELIGIBLE`, `NO_LOSER_ALL_REACHED_TARGET`, `SINGLE_LOSER`, `TIEBREAK_NEEDED`
     *   **Functions:**
-        *   `member_state(joined_at, excused, bounds) -> MemberState`. Joining mid-period takes precedence over an excusal.
+        *   `member_state(joined_at, removed_at, excused, bounds) -> MemberState`. `EXCUSED` if `excused` or `removed_at < bounds.ends_at`. Joining mid-period takes precedence over both.
         *   `points(member, target_n, bounds) -> int`. It counts check-ins inside the bounds, at or after `joined_at` and before `removed_at`, up to `target_n`.
         *   `score_period(target_n: int, bounds: PeriodBounds, members: Sequence[MemberPeriodInput]) -> PeriodOutcome`
         *   `pick_loser(candidates: Sequence[UUID], choose: Callable[[Sequence[UUID]], UUID] = secrets.choice) -> UUID`. It sorts the candidates by UUID, then calls `choose`. Tests pass a fixed `choose`.
@@ -867,7 +868,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
 
 *   **Type / Scope:** Property tests.
 *   **Proposed Changes:**
-    *   **Invariants:** 1–7, one test function each, named after the invariant.
+    *   **Invariants:** 1–7, one test function each, named after the invariant, plus the pure part of invariant 12: a member with `removed_at` inside the period is never a candidate.
     *   **Tie-break:** `pick_loser` always returns a member of the candidates. Over 1,000 calls with `secrets.choice`, every candidate in a set of 2–8 is picked at least once.
 
 #### 18. `services/api/tests/domain/test_scoring_examples.py` (Create)
@@ -1135,7 +1136,7 @@ Each stage is one or more small PRs with green CI, and each stage depends on the
         *   Another user's `client_request_id` gets `request-conflict`.
     *   **Deadline:** with the fake clock just before and just after a period's end, for check-ins, undo, excusal and revoke.
     *   **Invariant 11:** a settings change mid-period doesn't change the current period; the next period uses it.
-    *   **Invariant 12 and removals:** a member removed mid-period keeps their state and points, can still lose, can still read that period, and gets its results notification.
+    *   **Invariant 12 and removals:** a member removed mid-period is excused, keeps their points, can't lose, can still read that period, and gets its results notification. Re-adding them in the same period makes them eligible again.
     *   **Invariant 13:** undo of a check-in whose period has ended in any group is rejected with `period-closed`.
     *   **Missing rows:** undo and revoke with nothing active return `not-found`.
     *   **Settings timing:** a settings `PUT` at end + 1 minute, before anything else has touched the group, applies to the period after the one already running.
