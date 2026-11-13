@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft |
+| **Status** | Agreed |
 | **Author** | Shreyas Vaid |
 | **Design refs** | PRD FR-5–FR-9, §9; [engine design](../designs/game-engine.md#decided-rules) Decided Rules, [Eligibility](../designs/game-engine.md#eligibility-and-the-loser-rule), [Data model](../designs/game-engine.md#data-model-game-engine-only), [Request rules](../designs/game-engine.md#request-rules-api), Stage 4 items 28 and 32; HLD §4–§5; ADR-0004 |
 | **Phase** | v0.1 |
@@ -17,7 +17,7 @@ The game rules that membership affects (who plays a period, removal, re-adding, 
 
 ### Create a group
 
-1. A signed-in user enters a name, period length, target N, time zone and punishment text. The time zone defaults to the phone's zone. Bounds for N and period length are in Decided Rules.
+1. A signed-in user enters a name, period length, target N, time zone and punishment text, and can add a group image. The time zone defaults to the phone's zone. Bounds for N and period length are in Decided Rules.
 2. The server creates the group, its settings and an `admin` membership for the creator. The group is set up but not playing.
 3. The creator is now the admin. There is exactly one admin per group (Decided Rules, Roles).
 
@@ -25,16 +25,16 @@ The game rules that membership affects (who plays a period, removal, re-adding, 
 
 1. The admin opens the group and taps **Invite**. The server returns an invite code and a link that contains it. The admin shares the link however they like (messages, group chat). The app sends nothing itself.
 2. A group has at most one usable invite at a time. Creating a new one revokes the old one, so "reset link" is the same action as "new invite".
-3. An invite is multi-use and expires 7 days after it is created **[proposed]**. The admin can revoke it at any time.
+3. An invite is multi-use and expires 7 days after it is created. The admin can revoke it at any time. Only the admin creates invites, and accepting one is the only way into a group.
 4. A recipient opens the link, or types the code. If they aren't signed in, they sign in first and then return to the invite.
-5. The app shows a preview before joining: the group's name, the admin's display name, the number of active members, whether the game has started, and the current settings (N, period length, punishment text). The punishment is shown so nobody joins without knowing what they could lose.
+5. The app shows a preview before joining: the group's image, its name and the number of active members. Nothing else, so a leaked code reveals as little as possible about the group and its members. The settings and punishment are visible once they join; the remove flow covers anyone who joins and then wants out.
 6. The recipient taps **Join**. They become an active member with `joined_at` set to the server time. Whether they play the current period follows from Decided Rules (Joining; Period).
 7. Joining fails if the group already has 8 active members, if the user is already an active member, or if the invite is unknown, expired or revoked. Each failure has its own message (FR-15a).
 
 ### Start
 
 1. The admin adds the members and sets the settings, then taps **Start**. Before Start, settings can be changed freely; there is no current period for a change to wait for.
-2. Start needs at least 2 active members **[proposed]**. With one member there can never be a loser, so a one-person game is almost always a setup mistake.
+2. Start needs at least 2 active members. With one member there can never be a loser, so a one-person game is almost always a setup mistake.
 3. The server records `started_at`. The first period begins at the next start of a day in the group's zone (Decided Rules, Period). The app shows the countdown to it.
 4. Start happens once. Members can still join after Start, under the joining rules.
 
@@ -47,7 +47,7 @@ The game rules that membership affects (who plays a period, removal, re-adding, 
 
 ### Re-add a member
 
-1. A removed member comes back by accepting an invite, like anyone else. The admin can't put someone back without their consent **[proposed]**.
+1. A removed member comes back by accepting an invite, like anyone else. The admin can't put someone back directly, so nobody re-enters a game they could lose without agreeing to it.
 2. If the member was removed during the current period, or the group hasn't started, the server reuses their earlier membership row: it clears `removed_at` and keeps `joined_at`. This is the "re-adding restores their earlier state" rule in Decided Rules.
 3. If they were removed in an earlier period, they get a new membership row with `joined_at` set to now, so they join mid-period like any new member.
 4. Re-adding counts toward the 8-member cap.
@@ -63,12 +63,21 @@ The game rules that membership affects (who plays a period, removal, re-adding, 
 Account deletion itself is specified in the account-deletion spec (PRD FR-4). This spec defines only what happens to the admin role.
 
 1. Before deleting, the app tells an admin which groups they run and offers to hand over each one.
-2. If the admin deletes anyway, the role passes automatically to the active member with the earliest `joined_at`, with the lowest user ID breaking ties **[proposed]**. This happens in the same transaction as the removal.
-3. If no other active member remains, the group ends **[proposed]**: `ended_at` is set, no new periods are created, and members who were in its periods can still read their results.
+2. If the admin deletes anyway, the role passes automatically to the active member with the earliest `joined_at`, with the lowest user ID breaking ties. This happens in the same transaction as the removal.
+3. If no other active member remains, the group ends: `ended_at` is set, no new periods are created, and members who were in its periods can still read their results.
 
-### Rename a group
+### Rename a group or change its image
 
-The admin can change the group's name at any time. The other settings go through `PUT /settings`, which is a game endpoint (engine design, Stage 4 item 32).
+The admin can change the group's name and image at any time.
+
+### Group image
+
+1. The image is optional. Without one, the app shows a placeholder built from the group's initials.
+2. The app crops it square, resizes it to 512 × 512 and uploads a JPEG of at most 1 MB. The server rejects other types and larger files.
+3. Upload uses a short-lived signed URL, the same pattern as proof photos (HLD §5): the API returns the URL, the app uploads straight to object storage, then confirms. The API never handles image bytes.
+4. Replacing or removing the image deletes the old object. Reads get a short-lived signed URL.
+5. Who can see it: active members, and anyone holding a valid invite code (the preview). It is the only group content visible outside the group, so the app tells the admin that when they pick one.
+6. It isn't covered by the 30-day photo retention, which applies to proof photos; it lives as long as the group. The other settings go through `PUT /settings`, which is a game endpoint (engine design, Stage 4 item 32).
 
 ### Edge cases
 
@@ -86,7 +95,7 @@ The admin can change the group's name at any time. The other settings go through
 - [ ] Given settings out of range or an unknown time zone, when a group is created, then the request fails with `invalid-request` and nothing is stored.
 - [ ] Given an admin, when they create an invite, then they get a 10-character code that expires in 7 days, and any earlier unrevoked invite for the group is revoked.
 - [ ] Given a non-admin member, when they try to create or revoke an invite, then the request fails with `not-admin`.
-- [ ] Given a valid code, when a signed-in non-member previews it, then they see the group name, admin display name, active member count, started flag and settings, and no other member's details.
+- [ ] Given a valid code, when a signed-in non-member previews it, then the response contains only the group image URL (or null), the group name and the active member count.
 - [ ] Given a valid code and a group with fewer than 8 active members, when a user accepts it, then they become an active `member` with `joined_at` set to the server time.
 - [ ] Given a group with 8 active members, when a user accepts an invite, then the request fails with `group-full`.
 - [ ] Given a group with 7 active members, when two users accept an invite at the same moment, then exactly one joins and the other gets `group-full`.
@@ -103,6 +112,8 @@ The admin can change the group's name at any time. The other settings go through
 - [ ] Given an admin and an active member, when the admin hands over the role, then the target is `admin`, the former admin is `member`, and the group has exactly one admin.
 - [ ] Given an admin with other active members, when the admin's account is deleted, then the active member with the earliest `joined_at` becomes admin in the same transaction.
 - [ ] Given an admin who is the group's only active member, when their account is deleted, then `ended_at` is set and no new period is created for the group.
+- [ ] Given an admin, when they upload a JPEG of at most 1 MB through the signed URL and confirm it, then members and invite previews get a signed URL for it, and any previous image object is deleted.
+- [ ] Given an upload that isn't a JPEG or is over 1 MB, when the admin confirms it, then the request fails with `invalid-request` and the group keeps its previous image.
 - [ ] Given a user who isn't an active member, when they call any group endpoint except the invite preview and accept, then the response is 404 `not-member` (engine design, Request rules).
 - [ ] Given a removed member, when they list their groups, then the group isn't listed, and they can still read periods whose member set includes them.
 
@@ -114,13 +125,16 @@ All endpoints are under `/v1`, need a valid token (ADR-0004), and return RFC 945
 |---|---|---|---|
 | `POST /groups` | any user | Creates the group, `group_settings` and the admin membership. Body: `name`, `target_n`, `period_days`, `tz_name`, `punishment_text`. Returns `GroupOut`. | `invalid-request` |
 | `GET /groups` | any user | The caller's active groups: `id`, `name`, `started_at`, `my_role`. | — |
-| `GET /groups/{id}` | active member | `GroupOut`: `id`, `name`, `started_at`, `ended_at`, `my_role`, `settings`, `members` (active only: `user_id`, `display_name`, `role`, `joined_at`). | `not-member` |
+| `GET /groups/{id}` | active member | `GroupOut`: `id`, `name`, `image_url` (signed, or null), `started_at`, `ended_at`, `my_role`, `settings`, `members` (active only: `user_id`, `display_name`, `role`, `joined_at`). | `not-member` |
 | `PATCH /groups/{id}` | admin | Renames the group. Body: `name`. | `not-admin`, `invalid-request` |
+| `POST /groups/{id}/image` | admin | Returns a signed upload URL and an `upload_id`. | `not-admin` |
+| `PUT /groups/{id}/image` | admin | Confirms `upload_id`: checks type and size, sets the image, deletes the old object. | `not-admin`, `invalid-request` |
+| `DELETE /groups/{id}/image` | admin | Removes the image. Idempotent. | `not-admin` |
 | `POST /groups/{id}/start` | admin | Sets `started_at`. Returns the first period's `starts_at`. | `not-admin`, `already-started`, `too-few-members` |
 | `POST /groups/{id}/invites` | admin | Revokes any unrevoked invite, creates a new one. Returns `code`, `url`, `expires_at`. | `not-admin` |
 | `GET /groups/{id}/invites/current` | admin | The usable invite, or 404 `not-found` if there is none. | `not-admin`, `not-found` |
 | `DELETE /groups/{id}/invites/current` | admin | Revokes the usable invite. Idempotent. | `not-admin` |
-| `GET /invites/{code}` | any user | Preview: `group_name`, `admin_display_name`, `member_count`, `started`, `target_n`, `period_days`, `punishment_text`, `expires_at`. | `invite-not-found`, `invite-expired` |
+| `GET /invites/{code}` | any user | Preview: `group_name`, `group_image_url` (signed, or null), `member_count`. Nothing else. | `invite-not-found`, `invite-expired` |
 | `POST /invites/{code}/accept` | any user | Joins or re-joins the group. Returns `GroupOut`. | `invite-not-found`, `invite-expired`, `already-member`, `group-full` |
 | `DELETE /groups/{id}/members/{user_id}` | admin | Removes an active member. | `not-admin`, `target-not-member`, `target-is-admin` |
 | `PUT /groups/{id}/admin` | admin | Hands over the role. Body: `user_id`. | `not-admin`, `target-not-member`, `target-is-admin` |
@@ -146,11 +160,12 @@ New problem codes, added to the enum in engine design item 28:
 
 ```text
 groups    + ended_at        -- null while the group can play; set when no active member remains
+          + image_key       -- object storage key, null if no image
 invites   id, group_id, code, created_by, created_at, expires_at, revoked_at
           PK (id); UNIQUE (code); INDEX (group_id) WHERE revoked_at IS NULL
 ```
 
-- **Checks:** `name` 1–60 characters, `punishment_text` 1–280 characters **[proposed]**, `code` exactly 10 characters, `expires_at > created_at`.
+- **Checks:** `name` 1–60 characters, `punishment_text` 1–280 characters, `code` exactly 10 characters, `expires_at > created_at`.
 - **Codes are stored as plain text.** They are short-lived, revocable, and only grant a place in one group that the admin can take back. Hashing them would stop the admin from seeing the current code again, for little gain.
 - **Serializing membership writes.** Accept, remove, hand over, Start and admin succession each lock the group row first with `SELECT … FROM groups WHERE id = :id FOR UPDATE`. That makes the 8-member cap and the single-admin rule safe under concurrent requests without a retry loop. The partial unique indexes on `memberships` stay as a backstop.
 - **Handover order.** Within the transaction, the current admin is demoted before the target is promoted, because the partial unique index on the admin role is checked per statement.
@@ -166,7 +181,8 @@ invites   id, group_id, code, created_by, created_at, expires_at, revoked_at
   - `rejoin_reuses_row(removed_at, current_period_start, started)` covers the same-period, earlier-period and not-started cases.
 - **API (pytest, `db` marker):** one test per acceptance criterion, plus:
   - each endpoint's `not-member` and `not-admin` cases;
-  - the preview returns no member names other than the admin's (privacy, PRD §9);
+  - the preview returns exactly three fields: image URL, name and member count (privacy, PRD §9);
+  - image upload: wrong type and oversize are rejected; replacing deletes the old object; a non-member without a code can't get the image URL;
   - `GET /groups/{id}` never returns any member's time zone or profile fields;
   - joining mid-period: the joiner shows as `joined_mid_period` in `GET …/periods/current`;
   - a same-period re-add restores the member's earlier state in the live scores.
@@ -174,7 +190,7 @@ invites   id, group_id, code, created_by, created_at, expires_at, revoked_at
   - two accepts racing for the last place: exactly one `group-full`;
   - a handover racing a removal of the target: the group ends with exactly one admin who is an active member.
 - **Schemathesis:** the new endpoints are in the schema, so the existing contract run covers them, with every documented error status.
-- **Mobile (Stage 9):** the invite preview shows the punishment; Start is disabled with one member; the remove confirmation says the member is excused.
+- **Mobile (Stage 9):** the invite preview shows only the image, name and member count; the placeholder appears without an image; Start is disabled with one member; the remove confirmation says the member is excused.
 
 ## Alternatives considered
 
@@ -191,7 +207,9 @@ invites   id, group_id, code, created_by, created_at, expires_at, revoked_at
 
 | Risk | Likelihood | How we'd notice | Mitigation |
 |---|---|---|---|
-| An invite link is posted publicly and a stranger joins | Low | The admin sees an unknown name in the member list | 7-day expiry, revocation, admin removal, 8-member cap, preview names the admin |
+| An invite link is posted publicly and a stranger joins | Low | The admin sees an unknown name in the member list | 7-day expiry, revocation, admin removal, 8-member cap |
+| A joiner didn't know the punishment before joining | Medium | Group feedback | The preview shows only image, name and member count by decision; the admin shares the terms when inviting, and removal covers anyone who wants out |
+| An inappropriate group image is visible to invite holders | Low | Reports from members | Visible only to members and holders of a valid code; the admin can remove it; moderation tooling is out of scope for v0.1 |
 | Someone guesses a code | Very low: 50 bits against at most one live code per group | Spike in `invite-not-found` | Add a per-user rate limit on preview and accept if it happens |
 | Two joins exceed the cap | Low | Concurrency test | Group row lock; partial index backstop |
 | The automatic successor doesn't want the role | Medium | Group feedback | They can hand it on at once; the app prompts admins to hand over before deleting |
@@ -204,26 +222,29 @@ invites   id, group_id, code, created_by, created_at, expires_at, revoked_at
 - Universal links (`https://` invite links); they come with the App Store build.
 - Notifications for joins, removals and handovers.
 - Per-user limits on groups created or joined.
+- Image moderation.
 
 ## Open questions
 
-1. **Invite expiry and reuse.** Proposed: one usable invite per group, multi-use, 7-day expiry, revocable. Confirm, or pick a different expiry or single-use invites.
-2. **Admin succession on account deletion.** Proposed: the active member with the earliest `joined_at` becomes admin automatically. Alternatives: the group ends, or the deletion is blocked until the admin hands over.
-3. **Minimum members for Start.** Proposed: 2. Confirm, or allow a one-person group to start.
-4. **Group deletion.** Proposed: none in v0.1. A group ends only when no active member remains. Confirm, or add "end group" for the admin.
-5. **Settings before Start.** Proposed: freely editable before Start, with `applies_from: null`. Confirm.
-6. **Re-adding needs the member's consent.** Proposed: a removed member returns only by accepting an invite. Confirm, or let the admin re-add directly.
-7. **Text limits.** Proposed: group name 1–60 characters, punishment text 1–280 characters.
-8. **What the invite preview shows.** Proposed: group name, admin display name, member count, started flag, N, period length and punishment text, but no other member names. Confirm the privacy trade-off.
+None. Resolved by the author on 2026-11-12:
+
+1. **Invites:** one usable invite per group, multi-use, 7-day expiry, revocable.
+2. **Admin succession on account deletion:** the active member with the earliest `joined_at` becomes admin automatically.
+3. **Start:** needs at least 2 active members.
+4. **Group deletion:** none in v0.1; a group ends only when no active member remains.
+5. **Settings before Start:** freely editable, with `applies_from: null`.
+6. **Joining:** accepting an invite is the only way into a group, including for a removed member; only the admin creates invites.
+7. **Text limits:** group name 1–60 characters, punishment text 1–280.
+8. **Invite preview:** the group image, name and active member count only. This adds an optional group image (see "Group image").
 
 ## Doc updates needed
 
-Made in the PR that implements this spec, after the open questions are settled:
+Made in the PR that implements this spec:
 
 - **Engine design, data model:** add `groups.ended_at`; note that `ensure_current_period` returns `None` for ended groups (item 24).
 - **Engine design, item 28:** add the six new problem codes.
 - **Engine design, Request rules table:** replace "defined in spec 0001" with a link to this spec's API table, and list the new codes.
 - **Engine design, Still open:** resolve "The admin deletes their account" by linking to this spec.
-- **HLD §4:** add `created_at` to `invites`. **HLD §5:** add `POST /groups/{id}/start`, `PUT /groups/{id}/admin`, `GET /invites/{code}`, and the invite revoke and current-invite endpoints.
-- **PRD glossary:** "Group" says 1–8 members; add that Start needs at least 2, if open question 3 is confirmed. **PRD FR-6:** add the 7-day expiry and one usable invite per group.
-- **CLAUDE.md:** remove the item "removed member can still see results and gets the notification" from unconfirmed defaults if confirmed alongside this spec, and update the checklist.
+- **HLD §2:** object storage holds group images as well as proof photos. **HLD §4:** add `created_at` to `invites` and `image_key` to `groups`. **HLD §5:** add `POST /groups/{id}/start`, `PUT /groups/{id}/admin`, `GET /invites/{code}`, and the invite revoke and current-invite endpoints.
+- **PRD glossary:** "Group" says 1–8 members; add that Start needs at least 2. **PRD FR-6:** add the 7-day expiry, one usable invite per group, and the three-field preview. **PRD §9 privacy table:** add the group image (visible to members and invite holders). **PRD FR-5:** add the optional group image.
+- **CLAUDE.md:** remove the item "removed member can still see results and gets the notification" from unconfirmed defaults once confirmed, and update the checklist.
