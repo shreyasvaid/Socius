@@ -24,7 +24,7 @@ Done:
 - [x] Part A, Stage 1: scaffold, CI and branch protection (items 1–11; spec `docs/specs/0002-repo-scaffold.md`). Changes reach `main` only through PRs with a green `ci` check, squash-merged.
 
 Next, in order (item numbers refer to the design's Detailed Implementation Plan):
-1. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 12–47). Stage 2 waits on the unconfirmed defaults below that affect the engine.
+1. Part A, Stages 2–7: domain module, database, API, close job, tests, generated client (items 12–47). Not started; begins when Shreyas gives the go-ahead.
 2. Wire auth end-to-end (Supabase Auth → JWT verified by FastAPI → `GET /v1/me` from the app on a real iPhone dev build). That's the Phase 0 exit criterion; it needs the Expo scaffold (item 48) early.
 3. First v0.1 feature spec: `docs/specs/0001-groups-and-invites.md` (groups, invites, removing and re-adding members, 8-member cap). The four-week trial (design G1) depends on it.
 4. Part B, Stage 9: mobile app (items 48–52).
@@ -79,7 +79,7 @@ Tracked in PRD §12. Resolve them in the doc (and an ADR if significant) rather 
 ## Unconfirmed defaults (ask before treating as final)
 
 These were chosen by the assistant and not yet approved by Shreyas:
-18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · a removed member can still see results of periods they were part of and gets those periods' results notification · the game starts when the admin taps Start, at the next midnight in the group's zone · a deleted account is excused for its current periods · period length 1–365 days · N 1–100 (engine design, Decided Rules).
+18+ age gate · 30-day photo retention · calorie floor and max loss-rate defaults (must be verified against a reputable source before v0.2) · a removed member can still see results of periods they were part of and gets those periods' results notification (engine design, Decided Rules).
 
 ## Environment
 
